@@ -17,6 +17,25 @@ venv/
 .ruff_cache/
 .pytest_cache/
 
+# artefatos de cobertura e dos scanners do CI
+.coverage
+.coverage.*
+coverage.xml
+coverage.json
+htmlcov/
+bandit.json
+bandit.txt
+trivy-imagem.json
+trivy-config.txt
+hadolint.txt
+actionlint.txt
+gitleaks.json
+audit-*.json
+smoke.txt
+
+# temporários que o NFS deixa ao remover arquivo em uso
+.nfs*
+
 .DS_Store
 
 # Documentos internos ficam fora do repositório, exceto o guia da API key, que o
