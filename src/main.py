@@ -99,6 +99,17 @@ def _fmt_bandeira(codigo: str | None) -> str:
     return "".join(chr(0x1F1E6 + ord(c) - ord("A")) for c in codigo.upper())
 
 
+def _fmt_ano(timestamp: int | None) -> str:
+    """Timestamp Unix → apenas o ano. Para a listagem compacta dos cards."""
+    if not timestamp:
+        return ""
+    try:
+        return str(datetime.fromtimestamp(timestamp, tz=timezone.utc).year)
+    except (ValueError, OSError, OverflowError):
+        return ""
+
+
+templates.env.filters["ano"] = _fmt_ano
 templates.env.filters["datahora"] = _fmt_datahora
 templates.env.filters["idade"] = _fmt_idade
 templates.env.filters["bandeira"] = _fmt_bandeira
@@ -300,6 +311,64 @@ async def api_lookup(
         return await persistir(await lookup(q, client), store, cache)
     except SteamIdError as exc:
         return JSONResponse(status_code=400, content={"error": str(exc), "query": q})
+
+
+PAGINA_SALVOS = 12
+
+
+def _contexto_lista(dados: dict, q: str, limite: int) -> dict:
+    """Monta o contexto de paginação.
+
+    Usa o offset **efetivo** devolvido pela consulta, não o pedido: um offset além
+    do fim é preso à última página, e usar o valor pedido aqui produziria algo como
+    "página 4 de 3".
+    """
+    total = dados["total"]
+    offset = dados["offset"]
+    return {
+        "itens": dados["itens"],
+        "total": total,
+        "q": q,
+        "limite": limite,
+        "offset": offset,
+        "pagina": offset // limite + 1,
+        "paginas": max(1, -(-total // limite)),  # divisão com teto
+        "tem_anterior": offset > 0,
+        "tem_proxima": offset + limite < total,
+        "offset_anterior": max(0, offset - limite),
+        "offset_proxima": offset + limite,
+    }
+
+
+@app.get("/salvos", response_class=HTMLResponse)
+async def salvos(
+    request: Request,
+    q: str = Query("", description="Nome, nome real ou vanity; vazio lista os recentes"),
+    store: ProfileStore = Depends(get_store),
+):
+    """Página da base local: busca nos perfis já salvos, sem tocar a Steam."""
+    dados = await store.search(q, limite=PAGINA_SALVOS, offset=0)
+    return templates.TemplateResponse(
+        request,
+        "salvos.html",
+        {**_page_context(), **_contexto_lista(dados, q, PAGINA_SALVOS)},
+    )
+
+
+@app.get("/salvos/lista", response_class=HTMLResponse)
+async def salvos_lista(
+    request: Request,
+    q: str = Query(""),
+    offset: int = Query(0, ge=0),
+    store: ProfileStore = Depends(get_store),
+):
+    """Fragmento htmx: a lista paginada. Destino da busca ao vivo e dos botões."""
+    dados = await store.search(q, limite=PAGINA_SALVOS, offset=offset)
+    return templates.TemplateResponse(
+        request,
+        "partials/salvos_lista.html",
+        {**_page_context(), **_contexto_lista(dados, q, PAGINA_SALVOS)},
+    )
 
 
 @app.get("/api/salvos")

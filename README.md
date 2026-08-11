@@ -44,6 +44,8 @@ conta e os limites de uso estão em [`docs/steam-api-key.md`](docs/steam-api-key
 | `GET /` | página HTML completa com o formulário de busca |
 | `GET /search?q=…` | fragmento HTML com o JSON do resultado (destino do htmx) |
 | `GET /perfil/{id}` | página completa e compartilhável com os dados formatados |
+| `GET /salvos?q=…` | página da base local: busca ao vivo nos perfis salvos, paginada |
+| `GET /salvos/lista?q=&offset=` | fragmento htmx com a lista paginada |
 | `GET /avatar/{hash}` | avatar do cache local; baixa da CDN da Steam no 1º acesso |
 | `GET /api/lookup?q=…` | o mesmo resultado como JSON puro |
 | `GET /api/salvos?q=…` | perfis já salvos localmente; busca por nome parecido, sem tocar a Steam |
@@ -83,11 +85,21 @@ Toda busca bem-sucedida grava o perfil em SQLite (`/app/data/perfis.sqlite3`, vo
 `perfil-data`) e pré-baixa o avatar, para o perfil ficar completo em disco mesmo que ninguém
 abra a página.
 
+A interface fica em **<http://localhost:8000/salvos>** (link no pé da página inicial):
+busca ao vivo com debounce de 300 ms, cards com avatar, vanity, país e situação de ban, e
+paginação de 12 por página — tudo via htmx, sem JavaScript próprio. Clicar num card abre
+`/perfil/{steamid64}`.
+
+Via API:
+
 ```sh
 curl -s 'http://localhost:8000/api/salvos?q=erik' | python3 -m json.tool
 curl -s 'http://localhost:8000/api/salvos?limite=10&offset=0'   # q vazio: mais recentes
 curl -s http://localhost:8000/health   # → "perfis": {"profiles": N, "bytes": N}
 ```
+
+`offset` além do fim é **preso à última página**, então uma URL manipulada não produz
+"página 4 de 3" com lista vazia.
 
 ### O dado vive uma única vez
 
@@ -193,7 +205,7 @@ src/
   avatar_cache.py      download + cache em disco dos avatares
   db.py                SQLite: schema, upsert, busca FTS5
   lookup.py            orquestração: parse → converte → enriquece
-  templates/           base.html, index.html, perfil.html, partials/*
+  templates/           base.html, index.html, perfil.html, salvos.html, partials/*
   cache/               (volume avatar-cache) avatares baixados
   data/                (volume perfil-data) perfis.sqlite3
   static/css/          style.css

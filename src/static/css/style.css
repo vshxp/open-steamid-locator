@@ -502,6 +502,136 @@ body {
   border-top: 1px solid var(--border);
 }
 
+/* ---- lista de perfis salvos ---- */
+
+.contagem {
+  margin: 1.25rem 0 0.75rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.vazio {
+  margin: 1.5rem 0 0;
+  padding: 1.25rem;
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px dashed var(--border);
+  border-radius: 0.5rem;
+  text-align: center;
+  font-size: 0.875rem;
+}
+
+.cards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: 0.6rem;
+}
+
+.card-link {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.7rem;
+  height: 100%;
+  padding: 0.7rem;
+  color: inherit;
+  text-decoration: none;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.card-link:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface-2));
+}
+
+.card-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.card-avatar {
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+  border-radius: 0.4rem;
+  border: 1px solid var(--border);
+  object-fit: cover;
+}
+
+.card-avatar--vazio {
+  display: grid;
+  place-items: center;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.card-corpo {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.card-nome {
+  font-size: 0.92rem;
+  overflow-wrap: anywhere;
+}
+
+.card-real {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.card-vanity {
+  color: var(--accent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  overflow-wrap: anywhere;
+}
+
+.card-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-top: 0.35rem;
+}
+
+.badge--ban {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
+}
+
+/* ---- paginação ---- */
+
+.paginacao {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  margin-top: 1.25rem;
+}
+
+.paginacao-pos {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.acao[disabled] {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.acao[disabled]:hover {
+  background: transparent;
+}
+
 @media (max-width: 30rem) {
   .campos {
     grid-template-columns: 1fr;
@@ -515,5 +645,9 @@ body {
   .acoes {
     margin-left: 0;
     width: 100%;
+  }
+
+  .cards {
+    grid-template-columns: 1fr;
   }
 }

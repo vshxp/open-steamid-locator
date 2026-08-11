@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+
+{% block title %}Perfis salvos — {{ app_name }}{% endblock %}
+
+{% block content %}
+<a class="voltar" href="/">← buscar na Steam</a>
+
+<header class="head">
+  <h1 class="title">Perfis salvos</h1>
+  <p class="subtitle">Busca na sua base local — não gasta cota da Steam Web API</p>
+</header>
+
+<form class="busca" hx-get="/salvos/lista" hx-target="#lista" hx-swap="innerHTML" autocomplete="off">
+  <label class="sr-only" for="q">Nome, nome real ou vanity</label>
+  {# hx-get no próprio input: busca ao vivo, com debounce para não disparar a cada tecla #}
+  <input class="input"
+         id="q"
+         name="q"
+         type="search"
+         value="{{ q }}"
+         placeholder="nome, nome real ou vanity — ex.: gabe, erik, robinwalker"
+         hx-get="/salvos/lista"
+         hx-target="#lista"
+         hx-swap="innerHTML"
+         hx-trigger="input changed delay:300ms, search"
+         hx-indicator="#carregando"
+         aria-describedby="dica" />
+  <button class="btn" type="submit">Buscar</button>
+</form>
+
+<p id="dica" class="dica">
+  Casa por prefixo em <strong>persona name</strong>, <strong>nome real</strong> e
+  <strong>vanity URL</strong>. Campo vazio lista os mais recentes.
+</p>
+
+<div id="carregando" class="carregando" role="status">buscando…</div>
+
+<div id="lista" aria-live="polite">
+  {% include "partials/salvos_lista.html" %}
+</div>
+{% endblock %}

@@ -251,10 +251,24 @@ class ProfileStore:
             ).fetchone()
         return dict(linha) if linha else None
 
+    @staticmethod
+    def _clamp(offset: int, total: int, limite: int) -> int:
+        """Prende o offset à última página existente.
+
+        Offset chega pela URL e pode apontar além do fim — aí a consulta devolveria
+        lista vazia e a interface mostraria algo como "página 4 de 3". Prender ao
+        início da última página faz o caso degenerado virar uma página válida.
+        """
+        if total <= 0:
+            return 0
+        ultimo = ((total - 1) // limite) * limite
+        return max(0, min(offset, ultimo))
+
     def _search(self, termo: str, limite: int, offset: int) -> dict:
         """Busca por nome parecido na base local — o que a Web API não oferece.
 
-        Cobre persona name, nome real e vanity URL.
+        Cobre persona name, nome real e vanity URL. Devolve o `offset` efetivamente
+        usado, que pode diferir do pedido quando ele aponta além do fim.
         """
         termo = termo.strip()
         if not termo:
@@ -262,22 +276,28 @@ class ProfileStore:
             # já foi salvo sem precisar adivinhar um nome.
             with self._connect() as con:
                 total = con.execute("SELECT COUNT(*) FROM perfil").fetchone()[0]
+                offset = self._clamp(offset, total, limite)
                 linhas = con.execute(
                     f"SELECT {CAMPOS_PUBLICOS} FROM perfil "
                     "ORDER BY fetched_at DESC LIMIT ? OFFSET ?",
                     (limite, offset),
                 ).fetchall()
-            return {"total": total, "itens": [dict(x) for x in linhas]}
+            return {
+                "total": total,
+                "offset": offset,
+                "itens": [dict(x) for x in linhas],
+            }
 
         consulta = _consulta_fts(termo)
         if not consulta:
-            return {"total": 0, "itens": []}
+            return {"total": 0, "offset": 0, "itens": []}
         try:
             with self._connect() as con:
                 total = con.execute(
                     "SELECT COUNT(*) FROM perfil_fts WHERE perfil_fts MATCH ?",
                     (consulta,),
                 ).fetchone()[0]
+                offset = self._clamp(offset, total, limite)
                 linhas = con.execute(
                     f"""
                     SELECT {CAMPOS_PUBLICOS_P}
@@ -292,8 +312,8 @@ class ProfileStore:
         except sqlite3.OperationalError:
             # Rede de segurança: qualquer termo que ainda produza sintaxe inválida
             # no FTS5 vira "nenhum resultado", não erro 500.
-            return {"total": 0, "itens": []}
-        return {"total": total, "itens": [dict(x) for x in linhas]}
+            return {"total": 0, "offset": 0, "itens": []}
+        return {"total": total, "offset": offset, "itens": [dict(x) for x in linhas]}
 
     def _stats(self) -> dict:
         try:

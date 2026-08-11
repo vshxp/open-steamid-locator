@@ -1,0 +1,69 @@
+{% if total == 0 %}
+  <p class="vazio">
+    {% if q %}
+      Nenhum perfil salvo casa com <strong>{{ q }}</strong>.
+      A base só contém o que você já buscou.
+    {% else %}
+      Nada salvo ainda. Faça uma busca na
+      <a class="link" href="/">página inicial</a> — todo perfil encontrado é gravado aqui.
+    {% endif %}
+  </p>
+{% else %}
+  <p class="contagem">
+    {% if q %}
+      {{ total }} {{ 'resultado' if total == 1 else 'resultados' }} para <strong>{{ q }}</strong>
+    {% else %}
+      {{ total }} {{ 'perfil salvo' if total == 1 else 'perfis salvos' }}
+    {% endif %}
+  </p>
+
+  <ul class="cards">
+    {% for i in itens %}
+      <li class="card">
+        <a class="card-link" href="/perfil/{{ i.steamid64 }}">
+          {% if i.avatar_hash %}
+            <img class="card-avatar" src="/avatar/{{ i.avatar_hash }}" alt="" width="48" height="48" loading="lazy" />
+          {% else %}
+            <span class="card-avatar card-avatar--vazio" aria-hidden="true">{{ (i.persona_name or '?')[0] | upper }}</span>
+          {% endif %}
+
+          <span class="card-corpo">
+            <strong class="card-nome">{{ i.persona_name or i.steamid64 }}</strong>
+            {% if i.real_name %}<span class="card-real">{{ i.real_name }}</span>{% endif %}
+            {% if i.vanity %}<span class="card-vanity">/id/{{ i.vanity }}</span>{% endif %}
+
+            <span class="card-badges">
+              {% if i.country %}<span class="badge">{{ i.country | bandeira }} {{ i.country }}</span>{% endif %}
+              {% if i.vac_banned or i.game_ban_count or i.community_banned %}
+                <span class="badge badge--ban">com ban</span>
+              {% else %}
+                <span class="badge badge--publico">limpo</span>
+              {% endif %}
+              {% if i.created_at %}<span class="badge">{{ i.created_at | ano }}</span>{% endif %}
+            </span>
+          </span>
+        </a>
+      </li>
+    {% endfor %}
+  </ul>
+
+  {% if paginas > 1 %}
+    <nav class="paginacao" aria-label="Paginação">
+      <button class="acao"
+              {% if not tem_anterior %}disabled{% endif %}
+              hx-get="/salvos/lista?q={{ q | urlencode }}&offset={{ offset_anterior }}"
+              hx-target="#lista"
+              hx-swap="innerHTML"
+              hx-indicator="#carregando">← anterior</button>
+
+      <span class="paginacao-pos">página {{ pagina }} de {{ paginas }}</span>
+
+      <button class="acao"
+              {% if not tem_proxima %}disabled{% endif %}
+              hx-get="/salvos/lista?q={{ q | urlencode }}&offset={{ offset_proxima }}"
+              hx-target="#lista"
+              hx-swap="innerHTML"
+              hx-indicator="#carregando">próxima →</button>
+    </nav>
+  {% endif %}
+{% endif %}
