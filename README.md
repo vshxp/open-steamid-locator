@@ -1,5 +1,13 @@
 # open-steamid-locator
 
+[![CI](https://github.com/vshxp/open-steamid-locator/actions/workflows/ci.yml/badge.svg)](https://github.com/vshxp/open-steamid-locator/actions/workflows/ci.yml)
+[![Python 3.12 | 3.13](https://img.shields.io/badge/python-3.12%20%7C%203.13-3776AB?logo=python&logoColor=white)](#testes)
+[![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)](#rotas)
+[![Docker: Alpine](https://img.shields.io/badge/docker-alpine-2496ED?logo=docker&logoColor=white)](#imagem-de-produção)
+[![Testes: 249](https://img.shields.io/badge/testes-249-brightgreen)](#testes)
+[![Cobertura: 94%](https://img.shields.io/badge/cobertura-94%25-brightgreen)](#testes)
+[![Vulnerabilidades: 0](https://img.shields.io/badge/vulnerabilidades-0-brightgreen?logo=docker&logoColor=white)](#zero-vulnerabilidades-e-como-se-chegou-lá)
+
 Busca por SteamID servida por Python/FastAPI em Docker, com interface HTML+CSS em tema
 escuro e interatividade via htmx (fragmentos renderizados no servidor, sem framework JS).
 
@@ -424,4 +432,3 @@ segredo algum, mas revela a superfície da API — desative se isso incomodar.
 - Perfil privado na Steam devolve HTTP 200 com campos ausentes, não erro. O bloco
   `interpreted` marca isso com um `aviso` explícito para "não pude ver" não ser confundido
   com "não existe".
-- Ainda **não** há persistência. A resposta é sempre uma consulta ao vivo; nada é gravado.
