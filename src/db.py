@@ -22,6 +22,7 @@ já está deduplicado por construção no filesystem. O banco referencia o hash.
 import asyncio
 import json
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 
 from src.steamid import STEAM64_BASE
@@ -209,7 +210,7 @@ class ProfileStore:
     def __init__(self, path: Path) -> None:
         self._path = path
         path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as con:
+        with self._conexao() as con:
             self._migrar(con)
 
     @property
@@ -225,6 +226,23 @@ class ProfileStore:
         con.execute("PRAGMA busy_timeout=10000")
         con.execute("PRAGMA synchronous=NORMAL")
         return con
+
+    @contextmanager
+    def _conexao(self):
+        """Abre, commita (ou faz rollback) e **fecha** a conexão.
+
+        `sqlite3.Connection` usado diretamente como context manager gerencia
+        apenas a transação — ele não fecha a conexão ao sair do bloco. Usar
+        `with self._connect() as con` vazava um descritor de arquivo por
+        operação; num processo de longa duração isso esgota os descritores, e o
+        Python 3.13 passou a acusar o vazamento como ResourceWarning.
+        """
+        con = self._connect()
+        try:
+            with con:
+                yield con
+        finally:
+            con.close()
 
     @staticmethod
     def _migrar(con: sqlite3.Connection) -> None:
@@ -256,7 +274,7 @@ class ProfileStore:
     # ---- implementações síncronas ----
 
     def _save(self, steamid64: str, doc: str, agora: int) -> dict:
-        with self._connect() as con:
+        with self._conexao() as con:
             con.execute(
                 """
                 INSERT INTO perfil (steamid64, raw, fetched_at, first_seen_at)
@@ -278,7 +296,7 @@ class ProfileStore:
         }
 
     def _get(self, steamid64: str) -> dict | None:
-        with self._connect() as con:
+        with self._conexao() as con:
             linha = con.execute(
                 f"SELECT {CAMPOS_PUBLICOS} FROM perfil WHERE steamid64 = ?",  # noqa: S608 — SQL montado de constantes do módulo; valores só por binding ?
                 (steamid64,),
@@ -308,7 +326,7 @@ class ProfileStore:
         if not termo:
             # Sem termo: os mais recentes primeiro. Serve para inspecionar o que
             # já foi salvo sem precisar adivinhar um nome.
-            with self._connect() as con:
+            with self._conexao() as con:
                 total = con.execute("SELECT COUNT(*) FROM perfil").fetchone()[0]
                 offset = self._clamp(offset, total, limite)
                 linhas = con.execute(
@@ -327,7 +345,7 @@ class ProfileStore:
         if not consulta:
             return {"total": 0, "offset": 0, "itens": []}
         try:
-            with self._connect() as con:
+            with self._conexao() as con:
                 total = con.execute(
                     "SELECT COUNT(*) FROM perfil_fts WHERE perfil_fts MATCH ?",
                     (consulta,),
@@ -352,7 +370,7 @@ class ProfileStore:
 
     def _stats(self) -> dict:
         try:
-            with self._connect() as con:
+            with self._conexao() as con:
                 perfis = con.execute("SELECT COUNT(*) FROM perfil").fetchone()[0]
         except sqlite3.Error:
             return {"profiles": 0, "bytes": 0}

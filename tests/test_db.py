@@ -5,6 +5,7 @@ com o motivo, para ninguém "simplificar" o código e reintroduzi-los.
 """
 
 import sqlite3
+from contextlib import closing
 
 import pytest
 from conftest import BANS_LIMPO, BANS_SUJO, SUMMARY_PRIVADO, SUMMARY_PUBLICO
@@ -102,28 +103,30 @@ def test_vanity_e_nula_para_url_de_profiles(store):
     assert store._get(SID)["vanity"] is None
 
 
-def test_coluna_gerada_virtual_nao_ocupa_espaco(tmp_path):
+def test_coluna_gerada_virtual_nao_ocupa_espaco():
     """O ponto do schema: projeção custa zero bytes."""
-    con = sqlite3.connect(":memory:")
-    con.execute("CREATE TABLE so_json (raw TEXT)")
-    con.execute(
-        "CREATE TABLE com_geradas (raw TEXT, nome TEXT GENERATED ALWAYS AS "
-        "(json_extract(raw, '$.n')) VIRTUAL)"
-    )
-    doc = '{"n":"' + "x" * 50 + '"}'
-    con.executemany("INSERT INTO so_json VALUES (?)", [(doc,)] * 500)
-    con.executemany("INSERT INTO com_geradas (raw) VALUES (?)", [(doc,)] * 500)
+    with closing(sqlite3.connect(":memory:")) as con:
+        con.execute("CREATE TABLE so_json (raw TEXT)")
+        con.execute(
+            "CREATE TABLE com_geradas (raw TEXT, nome TEXT GENERATED ALWAYS AS "
+            "(json_extract(raw, '$.n')) VIRTUAL)"
+        )
+        doc = '{"n":"' + "x" * 50 + '"}'
+        con.executemany("INSERT INTO so_json VALUES (?)", [(doc,)] * 500)
+        con.executemany("INSERT INTO com_geradas (raw) VALUES (?)", [(doc,)] * 500)
 
-    def tamanho(tabela):
-        return con.execute("SELECT SUM(pgsize) FROM dbstat WHERE name = ?", (tabela,)).fetchone()[0]
+        def tamanho(tabela):
+            return con.execute(
+                "SELECT SUM(pgsize) FROM dbstat WHERE name = ?", (tabela,)
+            ).fetchone()[0]
 
-    assert tamanho("so_json") == tamanho("com_geradas")
+        assert tamanho("so_json") == tamanho("com_geradas")
 
 
 def test_indices_sao_usados_apesar_de_geradas(store):
     """Índice sobre coluna gerada virtual precisa ser aproveitado pelo planner."""
     salvar(store)
-    with store._connect() as con:
+    with store._conexao() as con:
         for coluna, indice in (
             ("persona_name", "idx_perfil_nome"),
             ("vanity", "idx_perfil_vanity"),
@@ -176,13 +179,13 @@ def test_fts_sincroniza_no_update(store):
 
 def test_fts_sincroniza_no_delete(store):
     salvar(store)
-    with store._connect() as con:
+    with store._conexao() as con:
         con.execute("DELETE FROM perfil WHERE steamid64 = ?", (SID,))
     assert store._search("rabs", 10, 0)["total"] == 0
 
 
 def test_ddl_do_fts_cobre_exatamente_fts_cols(store):
-    with store._connect() as con:
+    with store._conexao() as con:
         colunas = tuple(r["name"] for r in con.execute("PRAGMA table_info(perfil_fts)"))
     assert colunas == FTS_COLS
 
@@ -271,10 +274,10 @@ CREATE VIRTUAL TABLE perfil_fts USING fts5(
 
 def test_pragma_table_info_omite_colunas_geradas():
     """Documenta a armadilha que causou o bug — se o SQLite mudar, o teste avisa."""
-    con = sqlite3.connect(":memory:")
-    con.execute("CREATE TABLE t (a TEXT, b TEXT GENERATED ALWAYS AS (a) VIRTUAL)")
-    info = [r[1] for r in con.execute("PRAGMA table_info(t)")]
-    xinfo = [r[1] for r in con.execute("PRAGMA table_xinfo(t)")]
+    with closing(sqlite3.connect(":memory:")) as con:
+        con.execute("CREATE TABLE t (a TEXT, b TEXT GENERATED ALWAYS AS (a) VIRTUAL)")
+        info = [r[1] for r in con.execute("PRAGMA table_info(t)")]
+        xinfo = [r[1] for r in con.execute("PRAGMA table_xinfo(t)")]
     assert info == ["a"]
     assert "b" in xinfo
 
@@ -291,19 +294,18 @@ def test_migracao_e_idempotente(tmp_path):
 def test_migracao_de_banco_sem_vanity(tmp_path):
     """Banco antigo ganha a coluna, o índice textual é recriado e repovoado."""
     caminho = tmp_path / "perfis.sqlite3"
-    con = sqlite3.connect(caminho)
-    con.executescript(PRE_VANITY_DDL)
-    con.execute(
-        "INSERT INTO perfil (steamid64, raw, fetched_at, first_seen_at) VALUES (?,?,?,?)",
-        (SID, documento_canonico(SUMMARY_PUBLICO, BANS_LIMPO), 1000, 1000),
-    )
-    con.commit()
-    con.close()
+    with closing(sqlite3.connect(caminho)) as con:
+        con.executescript(PRE_VANITY_DDL)
+        con.execute(
+            "INSERT INTO perfil (steamid64, raw, fetched_at, first_seen_at) VALUES (?,?,?,?)",
+            (SID, documento_canonico(SUMMARY_PUBLICO, BANS_LIMPO), 1000, 1000),
+        )
+        con.commit()
 
     store = ProfileStore(caminho)
 
     assert store._get(SID)["vanity"] == "GabeLoganNewell"
-    with store._connect() as c:
+    with store._conexao() as c:
         assert tuple(r["name"] for r in c.execute("PRAGMA table_info(perfil_fts)")) == FTS_COLS
     assert store._search("gabelogan", 10, 0)["total"] == 1, "índice não foi repovoado"
     assert store._stats()["profiles"] == 1, "a linha existente foi preservada"

@@ -9,6 +9,8 @@ Duas garantias que a suíte inteira depende:
    `settings` é criado no import, então configurar depois não teria efeito.
 """
 
+import asyncio
+import contextlib
 import os
 import shutil
 import tempfile
@@ -127,9 +129,27 @@ def avatar_handler(*, conteudo: bytes = JPEG_FALSO, status: int = 200):
     return handler
 
 
+# Todo cliente criado pelos testes é registrado aqui e fechado ao fim de cada
+# teste. Mesmo com MockTransport, que não abre socket, o AsyncClient é um recurso
+# gerenciado: deixá-lo abrir sem fechar gera ResourceWarning, que o Python 3.13
+# eleva a exceção não-levantável e a configuração do pytest trata como erro.
+_CLIENTES: list[httpx.AsyncClient] = []
+
+
 def make_client(handler) -> httpx.AsyncClient:
-    """AsyncClient sem rede. Não precisa de aclose: MockTransport não abre socket."""
-    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    """AsyncClient sem rede, fechado automaticamente ao fim do teste."""
+    cliente = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    _CLIENTES.append(cliente)
+    return cliente
+
+
+@pytest.fixture(autouse=True)
+def _fechar_clientes():
+    yield
+    while _CLIENTES:
+        cliente = _CLIENTES.pop()
+        with contextlib.suppress(Exception):
+            asyncio.run(cliente.aclose())
 
 
 # -------------------------------------------------------------------- fixtures
