@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+
+{% block title %}Não encontrado — {{ app_name }}{% endblock %}
+
+{% block content %}
+<a class="voltar" href="/">← nova busca</a>
+
+<h1 class="title">Não foi possível montar esta página</h1>
+<p class="erro" role="alert">{{ message }}</p>
+<p class="dica">Entrada recebida: <code>{{ query }}</code></p>
+{% endblock %}

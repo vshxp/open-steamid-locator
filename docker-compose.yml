@@ -1,0 +1,26 @@
+services:
+  app:
+    build:
+      context: .
+      target: dev
+    image: open-steamid-locator:dev
+    container_name: open-steamid-locator
+    env_file: .env
+    ports:
+      - "${PORT:-8000}:8000"
+    volumes:
+      # hot-reload: código do host reflete no container sem rebuild
+      - ./src:/app/src
+      # Volume nomeado, não bind mount: o cache sobrevive à recriação do
+      # container e não deixa arquivos root-owned no repositório do host.
+      - avatar-cache:/app/cache
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+volumes:
+  avatar-cache:

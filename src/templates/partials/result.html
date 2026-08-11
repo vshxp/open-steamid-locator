@@ -1,0 +1,12 @@
+{% set api = result.steam_api %}
+<div class="resultado">
+  <div class="resultado-head">
+    <span class="tag">{{ result.query.detected }}</span>
+    <span class="tag tag--{{ api.status }}">steam_api: {{ api.status }}</span>
+    <span class="acoes">
+      <a class="acao acao--primaria" href="/perfil/{{ result.steamid.steamid64 }}">ver página</a>
+      <a class="acao" href="{{ result.steamid.profile_url }}" target="_blank" rel="noopener noreferrer">abrir perfil ↗</a>
+    </span>
+  </div>
+  <pre class="json"><code>{{ json_text }}</code></pre>
+</div>

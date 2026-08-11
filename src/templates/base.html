@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{% block title %}{{ app_name }}{% endblock %}</title>
+    <link rel="stylesheet" href="/static/css/style.css" />
+    <!-- htmx 2.0.4 — vendorizado, sem CDN -->
+    <script src="/static/js/htmx.min.js" defer></script>
+  </head>
+  <body>
+    <main class="shell">{% block content %}{% endblock %}</main>
+  </body>
+</html>

@@ -1,0 +1,24 @@
+.env
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# cache local de avatares (em Docker é volume nomeado; fora dele, cai aqui)
+/cache/
+
+*.sqlite3
+*.db
+
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+.DS_Store
+
+# Documentos internos ficam fora do repositório, exceto o guia da API key, que o
+# README referencia. Precisa ser `docs/*` e não `docs/`: excluir o diretório faz
+# o git não descer nele, e aí a negação abaixo nunca seria avaliada.
+docs/*
+!docs/steam-api-key.md

@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+
+{% block content %}
+<header class="head">
+  <h1 class="title">{{ app_name }}</h1>
+  <p class="subtitle">Busca por SteamID, SteamID2/3, account ID, URL de perfil ou vanity</p>
+</header>
+
+<form class="busca"
+      hx-get="/search"
+      hx-target="#saida"
+      hx-swap="innerHTML"
+      hx-indicator="#carregando"
+      autocomplete="off">
+  <label class="sr-only" for="q">SteamID ou URL de perfil</label>
+  <input class="input"
+         id="q"
+         name="q"
+         type="text"
+         required
+         placeholder="76561197960287930, STEAM_0:0:11101, [U:1:22202] ou steamcommunity.com/id/gabelogannewell"
+         aria-describedby="dica" />
+  <button class="btn" type="submit">Buscar</button>
+</form>
+
+<p id="dica" class="dica">
+  {% if steam_api_enabled %}
+    Steam Web API ativa — o resultado inclui nome, avatar, país e bans.
+  {% else %}
+    Sem <code>STEAM_API_KEY</code> no <code>.env</code>: só a conversão de SteamID.
+    Vanity URL não resolve.
+  {% endif %}
+</p>
+
+<div id="carregando" class="carregando" role="status">consultando…</div>
+
+<div id="saida" class="saida" aria-live="polite"></div>
+{% endblock %}

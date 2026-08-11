@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+
+{% set s = result.steamid %}
+{% set api = result.steam_api %}
+{% set i = api.get('interpreted', {}) %}
+{% set summary = api.get('raw', {}).get('summary') or {} %}
+{% set bans = i.get('bans') %}
+{% set nome = i.get('persona_name') %}
+
+{% block title %}{{ nome or s.steamid64 }} — {{ app_name }}{% endblock %}
+
+{% block content %}
+<a class="voltar" href="/">← nova busca</a>
+
+<section class="perfil-head">
+  {% if i.avatar_hash %}
+    {# Servido do cache local, não da CDN: o browser só fala com este servidor. #}
+    <img class="avatar" src="/avatar/{{ i.avatar_hash }}" alt="Avatar de {{ nome }}"
+         width="96" height="96" />
+  {% else %}
+    <div class="avatar avatar--vazio" aria-hidden="true">{{ (nome or '?')[0] | upper }}</div>
+  {% endif %}
+
+  <div class="perfil-id">
+    <h1 class="perfil-nome">{{ nome or 'Perfil sem dados de exibição' }}</h1>
+    {% if summary.realname %}
+      <p class="perfil-realname">{{ summary.realname }}</p>
+    {% endif %}
+
+    <div class="badges">
+      {% if i.visibility %}
+        <span class="badge badge--{{ 'publico' if i.visibility == 'público' else 'privado' }}">{{ i.visibility }}</span>
+      {% endif %}
+      {% if i.persona_state %}
+        <span class="badge badge--{{ 'online' if i.persona_state != 'offline' else 'offline' }}">{{ i.persona_state }}</span>
+      {% endif %}
+      {% if i.country %}
+        <span class="badge">{{ i.country | bandeira }} {{ i.country }}</span>
+      {% endif %}
+    </div>
+  </div>
+</section>
+
+{% if api.status != 'ok' %}
+  <p class="nota nota--{{ api.status }}">{{ api.reason }}</p>
+{% endif %}
+
+{% if bans %}
+  <section class="bans {{ 'bans--limpo' if bans.clean else 'bans--marcado' }}">
+    {% if bans.clean %}
+      <strong class="bans-titulo">✓ Nenhum ban registrado</strong>
+      <p class="bans-detalhe">Sem VAC ban, ban de jogo, ban de comunidade ou restrição econômica.</p>
+    {% else %}
+      <strong class="bans-titulo">⚠ Conta com restrições</strong>
+      <ul class="bans-lista">
+        {% if bans.vac_ban_count %}<li>{{ bans.vac_ban_count }} VAC ban{{ 's' if bans.vac_ban_count != 1 }}</li>{% endif %}
+        {% if bans.game_ban_count %}<li>{{ bans.game_ban_count }} ban{{ 's' if bans.game_ban_count != 1 }} de jogo</li>{% endif %}
+        {% if bans.community_banned %}<li>Banido da comunidade</li>{% endif %}
+        {% if bans.economy_ban and bans.economy_ban != 'none' %}<li>Restrição econômica: {{ bans.economy_ban }}</li>{% endif %}
+        {% if bans.days_since_last_ban is not none %}<li>Último ban há {{ bans.days_since_last_ban }} dia{{ 's' if bans.days_since_last_ban != 1 }}</li>{% endif %}
+      </ul>
+    {% endif %}
+  </section>
+{% endif %}
+
+<section class="bloco">
+  <h2 class="bloco-titulo">Identificadores</h2>
+  <dl class="campos">
+    <dt>SteamID64</dt><dd class="mono">{{ s.steamid64 }}</dd>
+    <dt>SteamID2</dt><dd class="mono">{{ s.steamid2 }}</dd>
+    <dt>SteamID2 legado</dt><dd class="mono">{{ s.steamid2_legacy }}</dd>
+    <dt>SteamID3</dt><dd class="mono">{{ s.steamid3 }}</dd>
+    <dt>Account ID</dt><dd class="mono">{{ s.account_id }}</dd>
+    <dt>Universo</dt><dd>{{ s.universe.name }} <span class="sutil">({{ s.universe.value }})</span></dd>
+    <dt>Tipo de conta</dt><dd>{{ s.account_type.name }} <span class="sutil">({{ s.account_type.value }})</span></dd>
+    <dt>Instância</dt><dd class="mono">{{ s.instance }}</dd>
+  </dl>
+</section>
+
+{% if api.status == 'ok' %}
+  <section class="bloco">
+    <h2 class="bloco-titulo">Conta</h2>
+    <dl class="campos">
+      <dt>Criada em</dt>
+      <dd>
+        {{ i.account_created_at | datahora }}
+        {% if i.account_created_at %}<span class="sutil">{{ i.account_created_at | idade }}</span>{% endif %}
+      </dd>
+      <dt>Último logoff</dt><dd>{{ i.last_logoff_at | datahora }}</dd>
+      <dt>País</dt><dd>{% if i.country %}{{ i.country | bandeira }} {{ i.country }}{% else %}—{% endif %}</dd>
+      <dt>URL personalizada</dt>
+      <dd>
+        {% if i.custom_url %}
+          <a class="link" href="{{ i.custom_url }}" target="_blank" rel="noopener noreferrer">{{ i.custom_url }}</a>
+        {% else %}—{% endif %}
+      </dd>
+      {% if summary.primaryclanid %}
+        <dt>Grupo principal</dt><dd class="mono">{{ summary.primaryclanid }}</dd>
+      {% endif %}
+    </dl>
+  </section>
+{% endif %}
+
+{% if i.aviso %}
+  <p class="aviso">{{ i.aviso }}</p>
+{% endif %}
+
+<details class="cru">
+  <summary class="cru-summary">JSON completo da API</summary>
+  <pre class="json"><code>{{ json_text }}</code></pre>
+</details>
+
+<p class="rodape">
+  <a class="acao acao--primaria" href="{{ s.profile_url }}" target="_blank" rel="noopener noreferrer">abrir na Steam ↗</a>
+  <a class="acao" href="/api/lookup?q={{ s.steamid64 }}">JSON puro</a>
+</p>
+{% endblock %}
