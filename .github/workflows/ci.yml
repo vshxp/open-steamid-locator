@@ -70,7 +70,9 @@ jobs:
     needs: [lint, test]
     uses: ./.github/workflows/reusable-container.yml
     with:
-      severidades: HIGH,CRITICAL
+      # MEDIUM incluído: as únicas CVEs acionáveis que a imagem já teve estavam
+      # nessa faixa (pip), e um portão só de HIGH/CRITICAL as deixava passar.
+      severidades: MEDIUM,HIGH,CRITICAL
 
   sumario:
     name: sumário

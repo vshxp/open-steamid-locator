@@ -10,7 +10,7 @@ on:
       severidades:
         description: Severidades consideradas no scan de CVE.
         type: string
-        default: HIGH,CRITICAL
+        default: MEDIUM,HIGH,CRITICAL
     outputs:
       cve-acionaveis:
         description: CVEs com correção publicada na imagem de produção.

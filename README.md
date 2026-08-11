@@ -193,7 +193,7 @@ Detalhes de implementação que importam:
 ## Estrutura
 
 ```
-Dockerfile             multi-stage: base → dev (reload) / prod (não-root, sem reload)
+Dockerfile             Alpine, multi-stage: build → dev (reload) / prod (não-root, sem pip)
 docker-compose.yml     ambiente de desenvolvimento
 requirements.txt       runtime: fastapi, uvicorn, jinja2, pydantic-settings, httpx
 requirements-dev.txt   testes, lint e auditoria
@@ -226,11 +226,49 @@ src/
 ```sh
 docker build --target prod -t open-steamid-locator:prod .
 docker run --rm -p 8000:8000 --env-file .env \
-  -e DEBUG=false -v avatar-cache:/app/cache \
+  -e DEBUG=false -v avatar-cache:/app/cache -v perfil-data:/app/data \
   open-steamid-locator:prod
 ```
 
-Roda como usuário não-root, código embutido na imagem, sem `--reload`.
+Roda como usuário não-root (uid 1000), código embutido na imagem, sem `--reload`.
+
+### Zero vulnerabilidades, e como se chegou lá
+
+Medido com `trivy`, **todas as severidades**:
+
+| base | vulnerabilidades | tamanho |
+| --- | --- | --- |
+| `python:3.12-slim` | **181** (4 CRITICAL, 21 HIGH) | 235 MB |
+| `python:3.12-alpine` | 5 (todas no `pip`) | 131 MB |
+| Alpine + venv, sem `pip`/`setuptools` | **0** | 148 MB |
+
+As 181 vinham **todas de pacotes de sistema operacional** — `perl-base` sozinho respondia por
+17 —, e **nenhuma tinha correção publicada**. Software que estava na imagem e a aplicação
+nunca executa. Não se consertam: removem-se, deixando de instalar.
+
+As 5 restantes no Alpine eram no `pip`, e essas **tinham** correção. Atualizar o pip não
+resolve: ele traz `setuptools` e `msgpack`, com 2 HIGH novos. `pip` e `setuptools` são
+ferramentas de *build* — a imagem final instala as dependências num venv no estágio de build
+e depois remove ambos do venv e do site-packages do sistema.
+
+Os +17 MB sobre o Alpine puro são o venv duplicado. Troca aceita: 17 MB por não ter
+ferramenta de build no runtime.
+
+O `/venv` fica de root e é apenas lido pelo processo. `chown -R` nele reescreveria cada
+arquivo numa camada nova — custava +55 MB de imagem sem ganho algum.
+
+### Riscos do musl, verificados
+
+Alpine usa musl em vez de glibc. O que foi testado antes de adotar:
+
+| risco | resultado |
+| --- | --- |
+| dependência sem wheel musl, forçando compilação | nenhuma compila; `uvloop`, `httptools`, `watchfiles` e `pydantic-core` têm wheel |
+| resolução DNS do musl | resolve `api.steampowered.com` e `avatars.steamstatic.com` igual ao glibc |
+| TLS de saída | HTTP 200 real da Steam Web API; avatar baixado da CDN e validado |
+| desempenho (malloc do musl) | 1287 ms vs 1245 ms em 200 requisições — dentro do ruído |
+| suíte de testes | 249/249 sobre musl, nas duas versões do Python |
+| hot-reload no alvo `dev` | `watchfiles` reage a edição de template e de código |
 
 > ⚠️ **`DEBUG=false` em produção não é opcional.** Com `debug=true`, o Starlette devolve a
 > página de traceback em erro não tratado, expondo trechos de código e valores de variáveis
@@ -310,11 +348,16 @@ sem ninguém commitar nada, e um pipeline que só dispara em push descobre isso 
 
 ### Duas decisões que valem saber
 
-**CVE sem correção não bloqueia.** O portão do trivy usa `--ignore-unfixed`: gasta seu
-crédito no que dá para consertar. Os pacotes do sistema operacional da imagem base
-`python:3.12-slim` têm CVEs HIGH/CRITICAL com status `affected`/`fix_deferred` — sem correção
-publicada, nada neste repositório os resolve. Eles aparecem no resumo, recolhidos, mas não
-deixam o pipeline cronicamente vermelho, o que faria todos pararem de olhar.
+**A imagem tem zero vulnerabilidades, em todas as severidades.** Não por sorte: a base é
+Alpine e a imagem final não carrega `pip` nem `setuptools`. Ver a seção da imagem abaixo.
+
+**O portão vai até MEDIUM.** As únicas CVEs acionáveis que a imagem já teve estavam nessa
+faixa — no próprio `pip` —, e um portão restrito a HIGH/CRITICAL as deixava passar.
+
+**CVE sem correção não bloqueia.** O portão usa `--ignore-unfixed`: gasta seu crédito no que
+dá para consertar. Hoje não há nenhuma na imagem, mas a regra continua valendo: se o upstream
+publicar uma CVE sem correção disponível, ela aparece no resumo e não trava o pipeline. Um
+pipeline cronicamente vermelho deixa de ser sinal.
 
 **Varredura inconclusiva falha fechada.** Se o pip-audit ou o trivy morrem antes de escrever
 o relatório, o resumo reporta `inconclusivo` e o portão falha. Auditoria que quebrou no meio
