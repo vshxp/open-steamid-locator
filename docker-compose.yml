@@ -11,17 +11,16 @@ services:
     volumes:
       # hot-reload: código do host reflete no container sem rebuild
       - ./src:/app/src
+      # para rodar a suíte de dentro: docker compose exec app pytest
+      - ./tests:/app/tests
+      - ./pyproject.toml:/app/pyproject.toml:ro
       # Volume nomeado, não bind mount: o cache sobrevive à recriação do
       # container e não deixa arquivos root-owned no repositório do host.
       - avatar-cache:/app/cache
       # Volume separado do cache: cache é descartável, isto é dado.
       - perfil-data:/app/data
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-      start_period: 5s
+    # Sem bloco healthcheck: o definido no Dockerfile é herdado, e uma única
+    # definição evita as duas divergirem.
     restart: unless-stopped
 
 volumes:

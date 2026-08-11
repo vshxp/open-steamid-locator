@@ -195,8 +195,17 @@ Detalhes de implementação que importam:
 ```
 Dockerfile             multi-stage: base → dev (reload) / prod (não-root, sem reload)
 docker-compose.yml     ambiente de desenvolvimento
-requirements.txt       fastapi, uvicorn, jinja2, pydantic-settings, httpx
+requirements.txt       runtime: fastapi, uvicorn, jinja2, pydantic-settings, httpx
+requirements-dev.txt   testes, lint e auditoria
+pyproject.toml         configuração de pytest, coverage, ruff e bandit
+.gitleaks.toml         allowlist de segredos, com justificativa por entrada
 .env                   configuração única, app + Docker (fora do git)
+.github/workflows/     ci.yml + reusable-{lint,test,sast,deps,secrets,container}.yml
+scripts/
+  smoke.sh             45 asserções contra uma instância em execução
+  ci_resumo_audit.py   JSON do pip-audit → Markdown do resumo
+  ci_resumo_trivy.py   JSON do trivy → Markdown, separando acionável de sem correção
+tests/                 249 testes, offline por construção
 src/
   main.py              rotas + lifespan do AsyncClient
   config.py            Settings lidas do .env
@@ -230,6 +239,103 @@ Roda como usuário não-root, código embutido na imagem, sem `--reload`.
 
 > A imagem `dev` **não** contém `src/` — o código chega por volume no compose. Rodar
 > `docker run` na imagem `dev` sem montar `./src` falha; use o alvo `prod`.
+
+## Testes
+
+249 testes, 94% de cobertura. A suíte é **offline por construção**: todo cliente HTTP usa
+`httpx.MockTransport` e os diretórios de dados apontam para temporários. Não precisa de
+`STEAM_API_KEY`, nem de rede, nem de Docker.
+
+```sh
+docker compose exec app pytest              # dentro do container de dev
+docker compose exec app pytest --cov=src    # com cobertura
+```
+
+Fora do Docker:
+
+```sh
+pip install -r requirements-dev.txt
+pytest
+```
+
+| arquivo | cobre |
+| --- | --- |
+| `test_steamid.py` | parsing e conversão: convergência de formatos, round-trip, entradas inválidas |
+| `test_db.py` | schema sem duplicação, upsert, FTS, clamp de offset, migração |
+| `test_avatar_cache.py` | validação de hash, download, escrita atômica, magic bytes |
+| `test_steam_api.py` | mapeamento de erros HTTP e proteção da API key |
+| `test_lookup.py` | orquestração, os quatro `status`, aviso de privacidade |
+| `test_routes.py` | rotas, fragmentos htmx, XSS, traversal, paginação |
+| `test_filters.py` | filtros de formatação dos templates |
+
+Vários testes são de **regressão** para bugs que de fato ocorreram, e estão marcados com o
+motivo no código — para ninguém "simplificar" e reintroduzi-los. Os três principais:
+
+- `PRAGMA table_info` **omite colunas geradas**; usá-lo na migração fazia a aplicação não
+  subir com `duplicate column name`.
+- Aspa no termo de busca escapava do aspeamento e virava sintaxe FTS5 → HTTP 500.
+- `offset` além do fim exibia "página 4 de 3" com lista vazia.
+
+### Smoke / DAST
+
+`scripts/smoke.sh` faz 45 asserções contra uma instância **em execução** — container real,
+uvicorn real, rede real. Pega o que teste de unidade não pega: imagem sem arquivo, permissão
+errada em volume, rota que só quebra fora do `TestClient`.
+
+```sh
+docker compose up -d
+scripts/smoke.sh http://localhost:8000
+```
+
+## CI
+
+`.github/workflows/ci.yml` é só orquestração; cada validação vive num workflow reutilizável
+(`reusable-*.yml`), chamável isoladamente e com entradas próprias.
+
+| etapa | valida | ferramenta |
+| --- | --- | --- |
+| `lint` | estilo, imports, bugbear, regras de segurança; e os próprios workflows | ruff, actionlint |
+| `test` | comportamento e cobertura, em Python 3.12 e 3.13 | pytest, coverage |
+| `sast` | padrões inseguros em `src/` | bandit |
+| `deps` | CVE em dependências de runtime e de dev | pip-audit |
+| `secrets` | segredo em **todo o histórico**, não só no diff | gitleaks |
+| `container` | Dockerfile, CVE da imagem, misconfiguração de IaC, DAST | hadolint, trivy, `smoke.sh` |
+| `sumario` | consolida tudo numa tabela no resumo da execução | — |
+
+O pipeline **nunca fala com a Steam**: a suíte é offline e o smoke roda no modo sem chave.
+Não há segredo configurado no repositório.
+
+Roda em push para `main`, em pull request, sob demanda, e **semanalmente** — CVE nova aparece
+sem ninguém commitar nada, e um pipeline que só dispara em push descobre isso tarde.
+
+### Duas decisões que valem saber
+
+**CVE sem correção não bloqueia.** O portão do trivy usa `--ignore-unfixed`: gasta seu
+crédito no que dá para consertar. Os pacotes do sistema operacional da imagem base
+`python:3.12-slim` têm CVEs HIGH/CRITICAL com status `affected`/`fix_deferred` — sem correção
+publicada, nada neste repositório os resolve. Eles aparecem no resumo, recolhidos, mas não
+deixam o pipeline cronicamente vermelho, o que faria todos pararem de olhar.
+
+**Varredura inconclusiva falha fechada.** Se o pip-audit ou o trivy morrem antes de escrever
+o relatório, o resumo reporta `inconclusivo` e o portão falha. Auditoria que quebrou no meio
+não pode passar por sinal verde.
+
+### Reproduzir localmente
+
+Todas as ferramentas rodam via imagem Docker pinada, então o que roda no CI é exatamente o
+que roda aqui:
+
+```sh
+docker run --rm -i hadolint/hadolint:2.12.0 hadolint - < Dockerfile
+docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.7
+docker run --rm -v "$PWD:/repo" aquasec/trivy:0.58.1 config /repo
+docker run --rm -v "$PWD:/repo" -w /repo zricethezav/gitleaks:v8.21.2 \
+  detect --source /repo --config /repo/.gitleaks.toml --redact
+```
+
+> `gitleaks detect --no-git` acusa a chave real no `.env` em disco. Isso é **correto**:
+> `.env` é deliberadamente ausente da allowlist, para que um commit acidental dele seja
+> detectado. O CI varre o histórico git, onde o `.env` nunca existiu.
 
 ## Segurança
 

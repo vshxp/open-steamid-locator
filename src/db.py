@@ -24,6 +24,8 @@ import json
 import sqlite3
 from pathlib import Path
 
+from src.steamid import STEAM64_BASE
+
 _PROFILE_URL = "json_extract(raw, '$.summary.profileurl')"
 
 # Extrai a vanity de uma profileurl. Só URLs /id/<vanity> têm vanity; /profiles/
@@ -35,38 +37,59 @@ CASE WHEN {_PROFILE_URL} LIKE '%/id/%'
 END
 """
 
+
+def _do_summary(campo: str) -> str:
+    return f"json_extract(raw, '$.summary.{campo}')"
+
+
+def _do_bans(campo: str) -> str:
+    return f"json_extract(raw, '$.bans.{campo}')"
+
+
+# Fonte única das projeções: (nome, tipo, expressão). O CREATE TABLE e as
+# migrações são gerados daqui, então acrescentar uma coluna nesta tupla basta —
+# bancos existentes a ganham por ALTER TABLE no próximo boot. Declarar em dois
+# lugares foi o que fez a migração conhecer só `vanity` e quebrar a subida quando
+# faltava outra coluna.
+COLUNAS_GERADAS: tuple[tuple[str, str, str], ...] = (
+    ("account_id", "INTEGER", f"CAST(steamid64 AS INTEGER) - {STEAM64_BASE}"),
+    ("persona_name", "TEXT", _do_summary("personaname")),
+    ("real_name", "TEXT", _do_summary("realname")),
+    ("avatar_hash", "TEXT", _do_summary("avatarhash")),
+    ("country", "TEXT", _do_summary("loccountrycode")),
+    ("profile_url", "TEXT", _PROFILE_URL),
+    ("vanity", "TEXT", VANITY_EXPR),
+    ("visibility", "INTEGER", _do_summary("communityvisibilitystate")),
+    ("persona_state", "INTEGER", _do_summary("personastate")),
+    ("created_at", "INTEGER", _do_summary("timecreated")),
+    ("last_logoff", "INTEGER", _do_summary("lastlogoff")),
+    ("clan_id", "TEXT", _do_summary("primaryclanid")),
+    ("vac_banned", "INTEGER", _do_bans("VACBanned")),
+    ("vac_ban_count", "INTEGER", _do_bans("NumberOfVACBans")),
+    ("game_ban_count", "INTEGER", _do_bans("NumberOfGameBans")),
+    ("community_banned", "INTEGER", _do_bans("CommunityBanned")),
+    ("economy_ban", "TEXT", _do_bans("EconomyBan")),
+)
+
+
+def _decl_gerada(nome: str, tipo: str, expressao: str) -> str:
+    """VIRTUAL, não STORED: computada na leitura, zero bytes em disco."""
+    return f"{nome} {tipo} GENERATED ALWAYS AS ({expressao}) VIRTUAL"
+
+
 # Não se usa STRICT aqui de propósito: sob STRICT, o tipo declarado de uma coluna
 # gerada é verificado contra o que json_extract devolve, e a Steam varia o tipo de
 # alguns campos entre número e string. A integridade vem de todas as escritas
 # passarem por save(), não do banco.
-SCHEMA_PERFIL = f"""
+SCHEMA_PERFIL = """
 CREATE TABLE IF NOT EXISTS perfil (
   steamid64     TEXT NOT NULL UNIQUE,
   raw           TEXT NOT NULL,
   fetched_at    INTEGER NOT NULL,
   first_seen_at INTEGER NOT NULL,
-
-  -- Projeções sobre `raw`. VIRTUAL = computadas na leitura, zero armazenamento.
-  account_id   INTEGER GENERATED ALWAYS AS (CAST(steamid64 AS INTEGER) - 76561197960265728) VIRTUAL,
-  persona_name TEXT GENERATED ALWAYS AS (json_extract(raw, '$.summary.personaname')) VIRTUAL,
-  real_name    TEXT GENERATED ALWAYS AS (json_extract(raw, '$.summary.realname')) VIRTUAL,
-  avatar_hash  TEXT GENERATED ALWAYS AS (json_extract(raw, '$.summary.avatarhash')) VIRTUAL,
-  country      TEXT GENERATED ALWAYS AS (json_extract(raw, '$.summary.loccountrycode')) VIRTUAL,
-  profile_url  TEXT GENERATED ALWAYS AS ({_PROFILE_URL}) VIRTUAL,
-  vanity       TEXT GENERATED ALWAYS AS ({VANITY_EXPR}) VIRTUAL,
-  visibility   INTEGER GENERATED ALWAYS AS (json_extract(raw, '$.summary.communityvisibilitystate')) VIRTUAL,
-  persona_state INTEGER GENERATED ALWAYS AS (json_extract(raw, '$.summary.personastate')) VIRTUAL,
-  created_at   INTEGER GENERATED ALWAYS AS (json_extract(raw, '$.summary.timecreated')) VIRTUAL,
-  last_logoff  INTEGER GENERATED ALWAYS AS (json_extract(raw, '$.summary.lastlogoff')) VIRTUAL,
-  clan_id      TEXT GENERATED ALWAYS AS (json_extract(raw, '$.summary.primaryclanid')) VIRTUAL,
-
-  vac_banned       INTEGER GENERATED ALWAYS AS (json_extract(raw, '$.bans.VACBanned')) VIRTUAL,
-  vac_ban_count    INTEGER GENERATED ALWAYS AS (json_extract(raw, '$.bans.NumberOfVACBans')) VIRTUAL,
-  game_ban_count   INTEGER GENERATED ALWAYS AS (json_extract(raw, '$.bans.NumberOfGameBans')) VIRTUAL,
-  community_banned INTEGER GENERATED ALWAYS AS (json_extract(raw, '$.bans.CommunityBanned')) VIRTUAL,
-  economy_ban      TEXT GENERATED ALWAYS AS (json_extract(raw, '$.bans.EconomyBan')) VIRTUAL
+  {geradas}
 );
-"""
+""".format(geradas=",\n  ".join(_decl_gerada(*c) for c in COLUNAS_GERADAS))
 
 # Separado da tabela de propósito: num banco já existente o CREATE TABLE acima é
 # pulado, e um índice sobre coluna nova falharia com "no such column" se rodasse
@@ -118,13 +141,28 @@ CREATE TRIGGER perfil_au AFTER UPDATE ON perfil BEGIN
 END;
 
 INSERT INTO perfil_fts(perfil_fts) VALUES ('rebuild');
-"""
+"""  # noqa: S608 — SQL montado de constantes do módulo; valores só por binding ?
 
 CAMPOS = (
-    "steamid64", "account_id", "persona_name", "real_name", "vanity",
-    "avatar_hash", "country", "profile_url", "visibility", "persona_state",
-    "created_at", "last_logoff", "clan_id", "vac_banned", "vac_ban_count",
-    "game_ban_count", "community_banned", "economy_ban", "fetched_at",
+    "steamid64",
+    "account_id",
+    "persona_name",
+    "real_name",
+    "vanity",
+    "avatar_hash",
+    "country",
+    "profile_url",
+    "visibility",
+    "persona_state",
+    "created_at",
+    "last_logoff",
+    "clan_id",
+    "vac_banned",
+    "vac_ban_count",
+    "game_ban_count",
+    "community_banned",
+    "economy_ban",
+    "fetched_at",
     "first_seen_at",
 )
 
@@ -199,24 +237,19 @@ class ProfileStore:
         con.executescript(SCHEMA_PERFIL)
 
         # table_xinfo, não table_info: `table_info` **omite** colunas geradas, então
-        # usá-lo aqui faria a migração tentar adicionar `vanity` a cada
-        # inicialização e falhar com "duplicate column name".
+        # usá-lo aqui faria a migração tentar adicionar coluna já existente e falhar
+        # com "duplicate column name" a cada inicialização.
         colunas = {linha["name"] for linha in con.execute("PRAGMA table_xinfo(perfil)")}
-        for nome, expressao in (("vanity", VANITY_EXPR),):
+        for nome, tipo, expressao in COLUNAS_GERADAS:
             if nome not in colunas:
-                con.execute(
-                    f"ALTER TABLE perfil ADD COLUMN {nome} TEXT "
-                    f"GENERATED ALWAYS AS ({expressao}) VIRTUAL"
-                )
+                con.execute(f"ALTER TABLE perfil ADD COLUMN {_decl_gerada(nome, tipo, expressao)}")
 
         # Só agora: os índices podem referenciar colunas acrescentadas acima.
         con.executescript(SCHEMA_INDICES)
 
         # Se o conjunto de colunas do índice textual divergir do desejado, recria e
         # repovoa. Cobre também o banco novo, em que perfil_fts ainda não existe.
-        fts_atual = tuple(
-            linha["name"] for linha in con.execute("PRAGMA table_info(perfil_fts)")
-        )
+        fts_atual = tuple(linha["name"] for linha in con.execute("PRAGMA table_info(perfil_fts)"))
         if fts_atual != FTS_COLS:
             con.executescript(FTS_RECREATE)
 
@@ -247,7 +280,8 @@ class ProfileStore:
     def _get(self, steamid64: str) -> dict | None:
         with self._connect() as con:
             linha = con.execute(
-                f"SELECT {CAMPOS_PUBLICOS} FROM perfil WHERE steamid64 = ?", (steamid64,)
+                f"SELECT {CAMPOS_PUBLICOS} FROM perfil WHERE steamid64 = ?",  # noqa: S608 — SQL montado de constantes do módulo; valores só por binding ?
+                (steamid64,),
             ).fetchone()
         return dict(linha) if linha else None
 
@@ -278,7 +312,8 @@ class ProfileStore:
                 total = con.execute("SELECT COUNT(*) FROM perfil").fetchone()[0]
                 offset = self._clamp(offset, total, limite)
                 linhas = con.execute(
-                    f"SELECT {CAMPOS_PUBLICOS} FROM perfil "
+                    # A supressão fica na linha do f-string, onde o ruff reporta.
+                    f"SELECT {CAMPOS_PUBLICOS} FROM perfil "  # noqa: S608
                     "ORDER BY fetched_at DESC LIMIT ? OFFSET ?",
                     (limite, offset),
                 ).fetchall()
@@ -306,7 +341,7 @@ class ProfileStore:
                     WHERE perfil_fts MATCH ?
                     ORDER BY f.rank
                     LIMIT ? OFFSET ?
-                    """,
+                    """,  # noqa: S608 — SQL montado de constantes do módulo; valores só por binding ?
                     (consulta, limite, offset),
                 ).fetchall()
         except sqlite3.OperationalError:
@@ -322,9 +357,7 @@ class ProfileStore:
         except sqlite3.Error:
             return {"profiles": 0, "bytes": 0}
         bytes_ = sum(
-            p.stat().st_size
-            for p in self._path.parent.glob(f"{self._path.name}*")
-            if p.is_file()
+            p.stat().st_size for p in self._path.parent.glob(f"{self._path.name}*") if p.is_file()
         )
         return {"profiles": perfis, "bytes": bytes_}
 

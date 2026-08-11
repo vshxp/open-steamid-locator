@@ -1,0 +1,97 @@
+# Suíte de testes com cobertura e piso mínimo.
+#
+# A suíte é offline por construção: todo cliente HTTP usa httpx.MockTransport e
+# os diretórios de dados apontam para temporários. Não precisa de STEAM_API_KEY,
+# nem de rede, nem de Docker.
+name: reusable / test
+
+on:
+  workflow_call:
+    inputs:
+      python-versions:
+        description: JSON com as versões do Python a exercitar.
+        type: string
+        default: '["3.12", "3.13"]'
+      python-primaria:
+        description: Versão cujo percentual de cobertura é publicado como saída.
+        type: string
+        default: "3.12"
+      cobertura-minima:
+        description: Piso de cobertura de linhas; abaixo disso o job falha.
+        type: number
+        default: 85
+    outputs:
+      cobertura:
+        description: Percentual de cobertura da versão primária.
+        value: ${{ jobs.pytest.outputs.cobertura }}
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    name: pytest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      # Sem fail-fast: saber que passou em 3.12 e quebrou em 3.13 é a informação
+      # útil; abortar a matriz na primeira falha esconde exatamente isso.
+      fail-fast: false
+      matrix:
+        python: ${{ fromJSON(inputs.python-versions) }}
+    outputs:
+      cobertura: ${{ steps.pct.outputs.cobertura }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Instalar dependências
+        run: pip install --disable-pip-version-check -r requirements-dev.txt
+
+      - name: pytest com cobertura
+        run: >-
+          python -m pytest
+          --cov=src
+          --cov-report=term-missing
+          --cov-report=xml:coverage.xml
+          --cov-fail-under=${{ inputs.cobertura-minima }}
+
+      - name: Tabela de cobertura no resumo
+        if: always()
+        run: |
+          {
+            if [ -f .coverage ]; then
+              echo "### Cobertura — Python ${{ matrix.python }}"
+              echo
+              python -m coverage report --format=markdown
+            else
+              echo "Sem dados de cobertura: a suíte não chegou a rodar."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publicar percentual da versão primária
+        id: pct
+        if: always() && matrix.python == inputs.python-primaria
+        run: |
+          if [ -f .coverage ]; then
+            python -m coverage json -o coverage.json -q
+            pct=$(python -c 'import json; print(json.load(open("coverage.json"))["totals"]["percent_covered_display"])')
+          else
+            pct="0"
+          fi
+          echo "cobertura=$pct" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cobertura-py${{ matrix.python }}
+          path: |
+            coverage.xml
+            coverage.json
+          retention-days: 14
+          if-no-files-found: warn

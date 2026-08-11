@@ -84,9 +84,7 @@ def parse_query(raw: str) -> ParsedQuery:
         if match := _RE_URL_VANITY.search(path):
             return ParsedQuery(raw=text, detected="url_vanity", vanity=match.group(1))
 
-        raise SteamIdError(
-            "URL não reconhecida. Use /profiles/<steamid64> ou /id/<vanity>."
-        )
+        raise SteamIdError("URL não reconhecida. Use /profiles/<steamid64> ou /id/<vanity>.")
 
     if match := _RE_STEAM2.match(text):
         universe, parity, half = (int(g) for g in match.groups())
@@ -95,18 +93,14 @@ def parse_query(raw: str) -> ParsedQuery:
             raise SteamIdError(f"Account ID fora de faixa em SteamID2: {account_id}")
         # Universo 0 aparece em SteamID2 legado; trata-se como público (1).
         del universe
-        return ParsedQuery(
-            raw=text, detected="steamid2", steamid64=STEAM64_BASE + account_id
-        )
+        return ParsedQuery(raw=text, detected="steamid2", steamid64=STEAM64_BASE + account_id)
 
     if match := _RE_STEAM3.match(text):
         _, account_id_str = match.groups()
         account_id = int(account_id_str)
         if not 1 <= account_id <= ACCOUNT_ID_MAX:
             raise SteamIdError(f"Account ID fora de faixa em SteamID3: {account_id}")
-        return ParsedQuery(
-            raw=text, detected="steamid3", steamid64=STEAM64_BASE + account_id
-        )
+        return ParsedQuery(raw=text, detected="steamid3", steamid64=STEAM64_BASE + account_id)
 
     if _RE_DIGITS.match(text):
         value = int(text)
@@ -117,9 +111,7 @@ def parse_query(raw: str) -> ParsedQuery:
                 steamid64=_validate_steam64(value, origin="SteamID64"),
             )
         if value >= 1:
-            return ParsedQuery(
-                raw=text, detected="account_id", steamid64=STEAM64_BASE + value
-            )
+            return ParsedQuery(raw=text, detected="account_id", steamid64=STEAM64_BASE + value)
         raise SteamIdError("Account ID deve ser maior que zero.")
 
     if _RE_VANITY.match(text):
@@ -134,9 +126,7 @@ def parse_query(raw: str) -> ParsedQuery:
 def _validate_steam64(value: int, *, origin: str) -> int:
     account_id = value & ACCOUNT_ID_MAX
     if value < STEAM64_BASE or account_id == 0:
-        raise SteamIdError(
-            f"{origin} inválido: {value} não corresponde a uma conta individual."
-        )
+        raise SteamIdError(f"{origin} inválido: {value} não corresponde a uma conta individual.")
     return value
 
 

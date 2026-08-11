@@ -1,0 +1,33 @@
+# Configuração do gitleaks. Estende o conjunto padrão de regras em vez de
+# substituí-lo — assim regras novas do upstream passam a valer automaticamente.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Exceções deliberadas, todas com justificativa"
+
+# NOTA: `.env` não está — e não deve entrar — nesta lista. Ele é gitignored e
+# nunca foi versionado; se algum dia for commitado, este job precisa gritar.
+# Silenciá-lo aqui removeria justamente a detecção mais importante do projeto.
+# Rodar `gitleaks detect --no-git` localmente acusa a chave real no .env em
+# disco: isso é o comportamento correto, não um falso positivo.
+
+paths = [
+  # O guia da API key mostra o formato da chave com um valor inventado. Precisa
+  # aparecer no documento para o leitor reconhecer o que copiar da Valve.
+  '''docs/steam-api-key\.md''',
+  # Chaves de exemplo nos testes são falsas por construção: a suíte é offline e
+  # nunca fala com a Steam.
+  '''tests/.*''',
+]
+
+regexes = [
+  # Placeholder do .env.example: chave vazia.
+  '''STEAM_API_KEY=\s*$''',
+  # Chave de exemplo do documento e dos testes, em qualquer caixa. São 32 hex
+  # que não correspondem a nenhuma credencial real.
+  '''(?i)A1B2C3D4E5F60718293A4B5C6D7E8F90''',
+  '''(?i)dEadbEef00112233445566778899aabb''',
+  '''(?i)0{32}''',
+]

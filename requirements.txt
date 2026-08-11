@@ -1,5 +1,7 @@
-fastapi==0.115.6
-uvicorn[standard]==0.34.0
-jinja2==3.1.5
-pydantic-settings==2.7.1
+# Versões pinadas e auditadas por pip-audit no CI. Ao subir uma versão, rode
+# `pip-audit -r requirements.txt` antes de commitar.
+fastapi==0.141.1
+uvicorn[standard]==0.52.1
+jinja2==3.1.6
+pydantic-settings==2.15.0
 httpx==0.28.1

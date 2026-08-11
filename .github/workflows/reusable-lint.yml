@@ -1,0 +1,94 @@
+# Estilo e consistência estática. Rápido de propósito: é o primeiro sinal.
+name: reusable / lint
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: Versão do Python usada para rodar o ruff.
+        type: string
+        default: "3.12"
+
+permissions:
+  contents: read
+
+jobs:
+  ruff:
+    name: ruff (lint + format)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Instalar o ruff
+        # Só o ruff, na versão pinada: o job não precisa das dependências da aplicação.
+        run: |
+          grep -E '^ruff==' requirements-dev.txt > /tmp/ruff.txt
+          cat /tmp/ruff.txt
+          pip install --disable-pip-version-check -r /tmp/ruff.txt
+
+      - name: Versão
+        run: ruff --version | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # --output-format=github faz o ruff emitir anotações inline no diff da PR.
+      - name: ruff check
+        id: check
+        run: ruff check --output-format=github .
+
+      - name: ruff format --check
+        id: format
+        if: always()
+        run: |
+          if ruff format --check .; then
+            echo "formatação consistente" >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "### Formatação divergente"
+              echo
+              echo "Rode \`ruff format .\` e commite o resultado."
+              echo
+              echo '<details><summary>diff</summary>'
+              echo
+              echo '```diff'
+              ruff format --diff . || true
+              echo '```'
+              echo '</details>'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+  actionlint:
+    name: actionlint (o CI validando o CI)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # Valida sintaxe dos workflows, expressões ${{ }}, referências de action e
+      # os scripts shell embutidos (via shellcheck). Pipeline quebrado só aparece
+      # depois do push, então vale checá-lo como qualquer outro código.
+      - name: Executar
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo \
+            rhysd/actionlint:1.7.7 -no-color | tee actionlint.txt
+          if [ -s actionlint.txt ]; then
+            {
+              echo "### Workflows — actionlint"
+              echo
+              echo '```'
+              cat actionlint.txt
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          {
+            echo "### Workflows — actionlint"
+            echo
+            echo "Sem achados nos workflows."
+          } >> "$GITHUB_STEP_SUMMARY"

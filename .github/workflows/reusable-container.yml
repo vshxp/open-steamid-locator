@@ -1,0 +1,196 @@
+# Cadeia do container: lint do Dockerfile, build, CVE, misconfiguração e DAST.
+#
+# As ferramentas rodam via imagem Docker pinada, e não via action, para que o CI
+# execute exatamente a mesma versão que se roda na máquina local.
+name: reusable / container
+
+on:
+  workflow_call:
+    inputs:
+      severidades:
+        description: Severidades consideradas no scan de CVE.
+        type: string
+        default: HIGH,CRITICAL
+    outputs:
+      cve-acionaveis:
+        description: CVEs com correção publicada na imagem de produção.
+        value: ${{ jobs.container.outputs.cve-acionaveis }}
+      smoke:
+        description: Resultado do smoke/DAST contra o container em execução.
+        value: ${{ jobs.container.outputs.smoke }}
+
+permissions:
+  contents: read
+
+env:
+  HADOLINT_IMAGE: hadolint/hadolint:2.12.0
+  TRIVY_IMAGE: aquasec/trivy:0.58.1
+  IMAGEM: open-steamid-locator:ci
+
+jobs:
+  container:
+    name: build, scan e DAST
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    outputs:
+      cve-acionaveis: ${{ steps.cve.outputs.acionaveis }}
+      smoke: ${{ steps.smoke.outcome }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint do Dockerfile (hadolint)
+        run: |
+          docker run --rm -i "$HADOLINT_IMAGE" hadolint --no-color - < Dockerfile \
+            | tee hadolint.txt
+          if [ -s hadolint.txt ]; then
+            {
+              echo "### Dockerfile — hadolint"
+              echo
+              echo '```'
+              cat hadolint.txt
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          {
+            echo "### Dockerfile — hadolint"
+            echo
+            echo "Sem achados."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Construir a imagem de produção
+        run: |
+          docker build --target prod -t "$IMAGEM" .
+          tamanho=$(docker image inspect "$IMAGEM" --format '{{.Size}}')
+          usuario=$(docker run --rm "$IMAGEM" whoami)
+          {
+            echo "### Imagem"
+            echo
+            echo "| alvo | tamanho | usuário |"
+            echo "| --- | --- | --- |"
+            echo "| prod | $(numfmt --to=iec "$tamanho") | \`$usuario\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Confirmar que produção não roda como root
+        run: |
+          usuario=$(docker run --rm "$IMAGEM" id -u)
+          if [ "$usuario" = "0" ]; then
+            echo "a imagem de produção está rodando como root" >&2
+            exit 1
+          fi
+          echo "uid do processo: $usuario"
+
+      - name: Cache do banco de vulnerabilidades
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/trivy
+          key: trivy-db-${{ github.run_id }}
+          restore-keys: trivy-db-
+
+      - name: CVEs na imagem (trivy)
+        id: cve
+        run: |
+          mkdir -p ~/.cache/trivy
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$HOME/.cache/trivy:/root/.cache/trivy" \
+            "$TRIVY_IMAGE" image --quiet --scanners vuln \
+            --severity "${{ inputs.severidades }}" \
+            --format json --output /root/.cache/trivy/saida.json "$IMAGEM" || true
+          cp "$HOME/.cache/trivy/saida.json" trivy-imagem.json 2>/dev/null || true
+
+          python3 scripts/ci_resumo_trivy.py trivy-imagem.json \
+            --titulo "Imagem de produção — trivy (${{ inputs.severidades }})" \
+            >> "$GITHUB_STEP_SUMMARY"
+          acionaveis=$(python3 scripts/ci_resumo_trivy.py trivy-imagem.json --apenas-total-acionavel)
+          echo "acionaveis=$acionaveis" >> "$GITHUB_OUTPUT"
+
+      # O portão gasta seu crédito no que dá para consertar. CVE de pacote do SO
+      # sem correção publicada aparece no relatório acima, mas não bloqueia — um
+      # pipeline cronicamente vermelho deixa de ser sinal.
+      - name: Falhar se houver CVE acionável
+        if: steps.cve.outputs.acionaveis != '0'
+        run: |
+          echo "trivy: ${{ steps.cve.outputs.acionaveis }} CVE(s) com correção publicada." >&2
+          exit 1
+
+      - name: Misconfiguração de IaC (trivy config)
+        run: |
+          docker run --rm \
+            -v "$PWD:/repo" \
+            -v "$HOME/.cache/trivy:/root/.cache/trivy" \
+            "$TRIVY_IMAGE" config --quiet --exit-code 1 /repo \
+            | tee trivy-config.txt
+          {
+            echo "### IaC — trivy config"
+            echo
+            if [ -s trivy-config.txt ]; then
+              echo '```'
+              cat trivy-config.txt
+              echo '```'
+            else
+              echo "Sem misconfiguração no Dockerfile nem no compose."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # DAST leve: o container de verdade, servindo de verdade. Sem
+      # STEAM_API_KEY — a conversão de SteamID não usa rede, então todas as
+      # asserções do smoke valem no modo offline.
+      - name: Subir o container
+        run: |
+          docker run -d --name osl-ci -p 8000:8000 \
+            -e DEBUG=false \
+            -e APP_NAME=open-steamid-locator-ci \
+            "$IMAGEM"
+
+      - name: Smoke e DAST
+        id: smoke
+        run: |
+          bash scripts/smoke.sh http://localhost:8000 | tee smoke.txt
+        continue-on-error: false
+
+      - name: Resumo do smoke
+        if: always()
+        run: |
+          {
+            echo "### Smoke / DAST"
+            echo
+            echo '```'
+            # sed remove as cores ANSI, que no Markdown viram lixo.
+            sed -e 's/\x1b\[[0-9;]*m//g' smoke.txt 2>/dev/null | tail -12 || echo "smoke não produziu saída"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Estado do healthcheck da imagem
+        if: always()
+        run: |
+          # O HEALTHCHECK é definido no Dockerfile; conferimos que o container
+          # chega a "healthy" sozinho, sem healthcheck do compose.
+          for _ in $(seq 30); do
+            estado=$(docker inspect --format '{{.State.Health.Status}}' osl-ci 2>/dev/null || echo desconhecido)
+            [ "$estado" = "healthy" ] && break
+            sleep 2
+          done
+          echo "healthcheck: $estado"
+          echo "| healthcheck da imagem | \`$estado\` |" >> "$GITHUB_STEP_SUMMARY"
+          [ "$estado" = "healthy" ]
+
+      - name: Logs do container
+        if: always()
+        run: docker logs osl-ci 2>&1 | tail -50 || true
+
+      - name: Derrubar
+        if: always()
+        run: docker rm -f osl-ci || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: container-relatorios
+          path: |
+            hadolint.txt
+            trivy-imagem.json
+            trivy-config.txt
+            smoke.txt
+          retention-days: 14
+          if-no-files-found: warn

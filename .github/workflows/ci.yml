@@ -1,0 +1,161 @@
+# Pipeline DevSecOps do open-steamid-locator.
+#
+# Este arquivo é só orquestração: cada validação vive num workflow reutilizável
+# em .github/workflows/reusable-*.yml, chamável isoladamente e com entradas
+# próprias. A intenção é que dê para rodar uma etapa sozinha ao investigar, e que
+# adicionar uma nova não exija mexer nas existentes.
+#
+#   lint       ruff (estilo, imports, bugbear, regras "S" de segurança)
+#   test       pytest com cobertura e piso mínimo, em duas versões do Python
+#   sast       bandit sobre src/
+#   deps       pip-audit (SCA) em runtime e desenvolvimento
+#   secrets    gitleaks em todo o histórico
+#   container  hadolint, build, trivy (CVE + IaC) e smoke/DAST no container real
+#   sumario    consolida tudo numa tabela única
+#
+# Nada aqui precisa de STEAM_API_KEY: a suíte é offline e o smoke roda no modo
+# sem chave. O pipeline nunca fala com a Steam.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # Segunda, 04:17 UTC. Auditoria de dependência e de imagem precisa de gatilho
+    # temporal: CVE nova aparece sem ninguém commitar nada.
+    - cron: "17 4 * * 1"
+
+# Menor privilégio por padrão; cada job reutilizável declara o que precisa.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: lint
+    uses: ./.github/workflows/reusable-lint.yml
+
+  test:
+    name: test
+    uses: ./.github/workflows/reusable-test.yml
+    with:
+      python-versions: '["3.12", "3.13"]'
+      python-primaria: "3.12"
+      cobertura-minima: 85
+
+  sast:
+    name: sast
+    uses: ./.github/workflows/reusable-sast.yml
+    with:
+      alvo: src
+
+  deps:
+    name: deps
+    uses: ./.github/workflows/reusable-deps.yml
+
+  secrets:
+    name: secrets
+    uses: ./.github/workflows/reusable-secrets.yml
+
+  container:
+    name: container
+    # Depende do lint e do teste de propósito: construir imagem e baixar base de
+    # CVE é o passo mais caro do pipeline, e não vale gastá-lo se o código nem
+    # passa no lint.
+    needs: [lint, test]
+    uses: ./.github/workflows/reusable-container.yml
+    with:
+      severidades: HIGH,CRITICAL
+
+  sumario:
+    name: sumário
+    runs-on: ubuntu-latest
+    needs: [lint, test, sast, deps, secrets, container]
+    # always(): o sumário é justamente o que se lê quando algo falhou.
+    if: always()
+    timeout-minutes: 5
+    steps:
+      - name: Consolidar
+        env:
+          R_LINT: ${{ needs.lint.result }}
+          R_TEST: ${{ needs.test.result }}
+          R_SAST: ${{ needs.sast.result }}
+          R_DEPS: ${{ needs.deps.result }}
+          R_SECRETS: ${{ needs.secrets.result }}
+          R_CONTAINER: ${{ needs.container.result }}
+          COBERTURA: ${{ needs.test.outputs.cobertura }}
+          SAST_ACHADOS: ${{ needs.sast.outputs.achados }}
+          DEPS_VULN: ${{ needs.deps.outputs.vulneraveis }}
+          SEGREDOS: ${{ needs.secrets.outputs.vazamentos }}
+          CVE_ACIONAVEIS: ${{ needs.container.outputs.cve-acionaveis }}
+        run: |
+          icone() {
+            case "$1" in
+              success)   echo "✅ passou" ;;
+              failure)   echo "❌ falhou" ;;
+              cancelled) echo "⛔ cancelado" ;;
+              skipped)   echo "⏭️ pulado" ;;
+              *)         echo "❔ $1" ;;
+            esac
+          }
+
+          {
+            echo "## Sumário DevSecOps"
+            echo
+            echo "Commit \`${GITHUB_SHA:0:7}\` · evento \`${GITHUB_EVENT_NAME}\` · ref \`${GITHUB_REF_NAME}\`"
+            echo
+            echo "| etapa | o que valida | resultado | medida |"
+            echo "| --- | --- | --- | --- |"
+            echo "| lint | estilo, imports, bugbear, regras S | $(icone "$R_LINT") | ruff |"
+            echo "| test | comportamento e cobertura | $(icone "$R_TEST") | ${COBERTURA:-–}% de linhas |"
+            echo "| sast | padrões inseguros em \`src/\` | $(icone "$R_SAST") | ${SAST_ACHADOS:-–} achado(s) |"
+            echo "| deps | CVE em dependências | $(icone "$R_DEPS") | ${DEPS_VULN:-–} vulnerabilidade(s) |"
+            echo "| secrets | segredo em todo o histórico | $(icone "$R_SECRETS") | ${SEGREDOS:-–} achado(s) |"
+            echo "| container | Dockerfile, CVE, IaC e DAST | $(icone "$R_CONTAINER") | ${CVE_ACIONAVEIS:-–} CVE acionável(is) |"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          falhou=0
+          for r in "$R_LINT" "$R_TEST" "$R_SAST" "$R_DEPS" "$R_SECRETS" "$R_CONTAINER"; do
+            [ "$r" != "success" ] && falhou=1
+          done
+
+          {
+            if [ "$falhou" -eq 0 ]; then
+              echo "**Todas as etapas passaram.**"
+            else
+              echo "**Há etapa não bem-sucedida.** Abra o job correspondente acima:"
+              echo "cada um publica o próprio detalhe neste resumo e anexa relatórios"
+              echo "como artefatos."
+            fi
+            echo
+            echo "<details><summary>O que este pipeline não cobre</summary>"
+            echo
+            echo "- **Rate limiting** das rotas próprias: cada busca gasta 2 chamadas da"
+            echo "  Steam Web API, e não há limite por IP. Requisito antes de expor"
+            echo "  publicamente, não coberto por teste."
+            echo "- **DAST autenticado**: o smoke roda sem \`STEAM_API_KEY\`, então o ramo"
+            echo "  de sucesso da Steam Web API não é exercitado no CI."
+            echo "- **CVE de sistema operacional sem correção publicada**: reportada, não"
+            echo "  bloqueante. Resolve-se quando a imagem base é reconstruída."
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Portão final
+        # Um único status para exigir em proteção de branch, em vez de listar
+        # cada job — assim adicionar uma etapa não exige reconfigurar a proteção.
+        if: >-
+          needs.lint.result != 'success' ||
+          needs.test.result != 'success' ||
+          needs.sast.result != 'success' ||
+          needs.deps.result != 'success' ||
+          needs.secrets.result != 'success' ||
+          needs.container.result != 'success'
+        run: |
+          echo "Ao menos uma etapa não passou; ver o sumário." >&2
+          exit 1

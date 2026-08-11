@@ -74,9 +74,7 @@ class AvatarCache:
         data = response.content
 
         if len(data) > MAX_BYTES:
-            raise AvatarCacheError(
-                f"Avatar {avatar_hash} tem {len(data)} bytes, acima do limite."
-            )
+            raise AvatarCacheError(f"Avatar {avatar_hash} tem {len(data)} bytes, acima do limite.")
         if not data.startswith(JPEG_MAGIC):
             # Página de erro disfarçada de imagem não vira arquivo em cache.
             raise AvatarCacheError(f"Conteúdo de {avatar_hash} não é JPEG.")

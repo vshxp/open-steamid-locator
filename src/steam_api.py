@@ -40,17 +40,13 @@ class SteamClient:
             ) from exc
 
         if response.status_code in (401, 403):
-            raise SteamApiError(
-                "Steam recusou a chave (401/403). Verifique STEAM_API_KEY no .env."
-            )
+            raise SteamApiError("Steam recusou a chave (401/403). Verifique STEAM_API_KEY no .env.")
         if response.status_code == 429:
             raise SteamApiError(
                 "Rate limit da Steam atingido (429). Aguarde antes de tentar de novo."
             )
         if response.status_code >= 500:
-            raise SteamApiError(
-                f"Steam indisponível (HTTP {response.status_code})."
-            )
+            raise SteamApiError(f"Steam indisponível (HTTP {response.status_code}).")
         if response.status_code != 200:
             raise SteamApiError(f"Resposta inesperada da Steam: HTTP {response.status_code}.")
 
@@ -61,9 +57,7 @@ class SteamClient:
 
     async def resolve_vanity(self, vanity: str) -> int | None:
         """vanity URL → SteamID64. Devolve None quando o vanity não existe."""
-        payload = await self._get(
-            "/ISteamUser/ResolveVanityURL/v1/", {"vanityurl": vanity}
-        )
+        payload = await self._get("/ISteamUser/ResolveVanityURL/v1/", {"vanityurl": vanity})
         result = payload.get("response", {})
         if result.get("success") == VANITY_NO_MATCH:
             return None
@@ -83,8 +77,6 @@ class SteamClient:
         return players[0] if players else None
 
     async def player_bans(self, steamid64: int) -> dict | None:
-        payload = await self._get(
-            "/ISteamUser/GetPlayerBans/v1/", {"steamids": str(steamid64)}
-        )
+        payload = await self._get("/ISteamUser/GetPlayerBans/v1/", {"steamids": str(steamid64)})
         players = payload.get("players") or []
         return players[0] if players else None

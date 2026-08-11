@@ -4,7 +4,7 @@ Fonte única de verdade do JSON de resposta. A rota HTML e a rota JSON consomem
 exatamente o mesmo dicionário, então a tela nunca divergir da API.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from src.steam_api import SteamApiError, SteamClient
 from src.steamid import SteamIdError, parse_query, to_identity
@@ -29,7 +29,7 @@ VISIBILITY = {
 def _iso(timestamp: int | None) -> str | None:
     if not timestamp:
         return None
-    return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
+    return datetime.fromtimestamp(timestamp, tz=UTC).isoformat()
 
 
 def _url_segura(url: str | None) -> str | None:
@@ -70,8 +70,7 @@ def _interpret(summary: dict | None, bans: dict | None) -> dict:
 
         if not is_public:
             interpreted["aviso"] = (
-                "Perfil não é público. Campos ausentes significam 'não pude ver', "
-                "não 'não existe'."
+                "Perfil não é público. Campos ausentes significam 'não pude ver', não 'não existe'."
             )
 
     if bans:
@@ -87,10 +86,7 @@ def _interpret(summary: dict | None, bans: dict | None) -> dict:
             if (vac_bans or game_bans)
             else None,
             "clean": not (
-                bans.get("VACBanned")
-                or vac_bans
-                or game_bans
-                or bans.get("CommunityBanned")
+                bans.get("VACBanned") or vac_bans or game_bans or bans.get("CommunityBanned")
             ),
         }
 

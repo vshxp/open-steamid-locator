@@ -25,7 +25,9 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "open-steamid-locator"
-    host: str = "0.0.0.0"
+    # Dentro do container é o único bind que o host alcança; a exposição real é
+    # controlada pelo mapeamento de portas do Docker, não por este valor.
+    host: str = "0.0.0.0"  # noqa: S104  # nosec B104
     port: int = 8000
     debug: bool = False
 

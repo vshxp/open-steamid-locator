@@ -1,0 +1,79 @@
+# SCA: vulnerabilidades conhecidas nas dependências.
+#
+# Roda também em agenda no ci.yml — CVE nova aparece sem ninguém commitar, e um
+# pipeline que só dispara em push descobre isso tarde.
+name: reusable / deps
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        type: string
+        default: "3.12"
+    outputs:
+      vulneraveis:
+        description: Total de vulnerabilidades somando runtime e desenvolvimento.
+        value: ${{ jobs.pip-audit.outputs.vulneraveis }}
+
+permissions:
+  contents: read
+
+jobs:
+  pip-audit:
+    name: pip-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      vulneraveis: ${{ steps.resumir.outputs.total }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Instalar o pip-audit
+        run: |
+          grep -E '^pip-audit' requirements-dev.txt > /tmp/audit.txt
+          pip install --disable-pip-version-check -r /tmp/audit.txt
+
+      - name: Auditar dependências de runtime
+        continue-on-error: true
+        run: |
+          pip-audit -r requirements.txt --progress-spinner off \
+            --format json --output audit-runtime.json
+          pip-audit -r requirements.txt --progress-spinner off
+
+      - name: Auditar dependências de desenvolvimento
+        continue-on-error: true
+        run: |
+          pip-audit -r requirements-dev.txt --progress-spinner off \
+            --format json --output audit-dev.json
+          pip-audit -r requirements-dev.txt --progress-spinner off
+
+      - name: Resumir
+        id: resumir
+        if: always()
+        run: |
+          python scripts/ci_resumo_audit.py audit-runtime.json audit-dev.json \
+            >> "$GITHUB_STEP_SUMMARY"
+          total=$(python scripts/ci_resumo_audit.py --apenas-total \
+            audit-runtime.json audit-dev.json)
+          echo "total=$total" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sca-pip-audit
+          path: audit-*.json
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Falhar se houver vulnerabilidade
+        if: always() && steps.resumir.outputs.total != '0'
+        run: |
+          echo "pip-audit reportou ${{ steps.resumir.outputs.total }} vulnerabilidade(s)." >&2
+          echo "Suba as versões afetadas em requirements.txt / requirements-dev.txt." >&2
+          exit 1

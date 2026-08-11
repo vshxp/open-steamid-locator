@@ -1,0 +1,95 @@
+# SAST: análise estática em busca de padrões inseguros no código da aplicação.
+#
+# Duas ferramentas com sobreposição parcial e proposital:
+#   - ruff, regras "S" (portadas do bandit) — roda no job de lint
+#   - bandit — tem checagens que o ruff ainda não porta
+name: reusable / sast
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        type: string
+        default: "3.12"
+      alvo:
+        description: Diretório analisado.
+        type: string
+        default: src
+    outputs:
+      achados:
+        description: Número de achados do bandit.
+        value: ${{ jobs.bandit.outputs.achados }}
+
+permissions:
+  contents: read
+
+jobs:
+  bandit:
+    name: bandit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      achados: ${{ steps.contar.outputs.total }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Instalar o bandit
+        run: |
+          grep -E '^bandit' requirements-dev.txt > /tmp/bandit.txt
+          pip install --disable-pip-version-check -r /tmp/bandit.txt
+
+      # continue-on-error para o relatório existir mesmo com achados. O portão é
+      # o último passo do job, que lê a contagem.
+      - name: Executar
+        continue-on-error: true
+        run: |
+          bandit -c pyproject.toml -r "${{ inputs.alvo }}" -f json -o bandit.json
+          bandit -c pyproject.toml -r "${{ inputs.alvo }}" -f txt -o bandit.txt
+          cat bandit.txt
+
+      - name: Contar achados e resumir
+        id: contar
+        if: always()
+        run: |
+          if [ ! -f bandit.json ]; then
+            echo "total=indefinido" >> "$GITHUB_OUTPUT"
+            echo "bandit não produziu relatório." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          total=$(python -c 'import json; print(len(json.load(open("bandit.json"))["results"]))')
+          echo "total=$total" >> "$GITHUB_OUTPUT"
+          {
+            echo "### SAST — bandit"
+            echo
+            if [ "$total" -eq 0 ]; then
+              echo "Nenhum achado em \`${{ inputs.alvo }}\`."
+            else
+              echo "**$total achado(s)** — relatório completo no artefato \`sast-bandit\`."
+              echo
+              echo '```'
+              sed -n '/>> Issue/,$p' bandit.txt | head -80
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sast-bandit
+          path: |
+            bandit.json
+            bandit.txt
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Falhar se houver achado
+        if: always() && steps.contar.outputs.total != '0'
+        run: |
+          echo "bandit reportou ${{ steps.contar.outputs.total }} achado(s)." >&2
+          exit 1

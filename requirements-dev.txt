@@ -1,0 +1,16 @@
+-r requirements.txt
+
+# Testes
+pytest==9.1.1
+pytest-cov==7.1.0
+# A partir do starlette 1.x o TestClient usa httpx2; sem ele o import emite
+# DeprecationWarning, que a configuração do pytest trata como erro. Só teste —
+# a aplicação continua usando httpx para falar com a Steam.
+httpx2==2.10.0
+
+# Lint e formatação
+ruff==0.9.2
+
+# Segurança
+bandit[toml]==1.8.2
+pip-audit==2.7.3

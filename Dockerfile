@@ -9,15 +9,28 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
-    && rm -rf /var/lib/apt/lists/*
+# Nenhum pacote apt é instalado de propósito. O healthcheck usa a stdlib do
+# Python (ver docker-compose.yml), o que evita uma camada inteira do apt: imagem
+# menor, menos pacotes para o scanner de CVE e sem o dilema do DL3008 — pinar
+# versão de apt quebra o build quando a versão sai do mirror, e não pinar é
+# achado de lint.
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Definido na imagem, não no compose: assim `docker run` puro também tem
+# healthcheck. urlopen levanta em status != 2xx e em falha de conexão, então o
+# código de saída já reflete a saúde sem verificação explícita.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD ["python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+
 # ---- dev: código vem por volume, uvicorn com --reload ----
 FROM base AS dev
+
+# Ferramentas de teste, lint e auditoria só neste alvo — a imagem de produção
+# não as carrega.
+COPY requirements-dev.txt .
+RUN pip install --no-cache-dir -r requirements-dev.txt
 
 ENV DEBUG=true
 

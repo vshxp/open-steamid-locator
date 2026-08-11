@@ -1,7 +1,7 @@
 import json
 import logging
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import httpx
 from fastapi import Depends, FastAPI, Query, Request
@@ -40,9 +40,7 @@ async def lifespan(app: FastAPI):
         headers={"User-Agent": f"{settings.app_name}/0.1"},
     )
     app.state.http = http
-    app.state.steam = (
-        SteamClient(settings.steam_api_key, http) if settings.steam_api_key else None
-    )
+    app.state.steam = SteamClient(settings.steam_api_key, http) if settings.steam_api_key else None
     app.state.avatars = AvatarCache(settings.cache_dir / "avatars", http)
     app.state.store = ProfileStore(settings.data_dir / "perfis.sqlite3")
 
@@ -77,7 +75,7 @@ def _fmt_idade(iso: str | None) -> str:
         criada = datetime.fromisoformat(iso)
     except ValueError:
         return ""
-    dias = (datetime.now(timezone.utc) - criada).days
+    dias = (datetime.now(UTC) - criada).days
     if dias < 0:
         return ""
     anos, resto = divmod(dias, 365)
@@ -104,7 +102,7 @@ def _fmt_ano(timestamp: int | None) -> str:
     if not timestamp:
         return ""
     try:
-        return str(datetime.fromtimestamp(timestamp, tz=timezone.utc).year)
+        return str(datetime.fromtimestamp(timestamp, tz=UTC).year)
     except (ValueError, OSError, OverflowError):
         return ""
 
@@ -146,7 +144,7 @@ async def persistir(result: dict, store: ProfileStore, cache: AvatarCache) -> di
         return result
 
     steamid64 = result["steamid"]["steamid64"]
-    agora = int(datetime.now(timezone.utc).timestamp())
+    agora = int(datetime.now(UTC).timestamp())
 
     try:
         meta = await store.save(steamid64, documento_canonico(summary, bans), agora)
@@ -210,9 +208,7 @@ async def search(
     try:
         result = await persistir(await lookup(q, client), store, cache)
     except SteamIdError as exc:
-        return templates.TemplateResponse(
-            request, "partials/error.html", {"message": str(exc)}
-        )
+        return templates.TemplateResponse(request, "partials/error.html", {"message": str(exc)})
 
     return templates.TemplateResponse(
         request,
