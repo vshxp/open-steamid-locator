@@ -122,13 +122,18 @@ SteamID64.
 ### Busca por nome parecido
 
 O FTS5 dá localmente o que a Steam Web API não oferece: **busca por nome aproximado**. A API
-tem 169 métodos e nenhum busca usuário por nome — só `ResolveVanityURL`, que é exato. Sobre
-os seus próprios dados acumulados, `?q=rob` acha `Robin` e `?q=erik` acha `EJ` (pelo
-`real_name` "Erik Johnson").
+tem 169 métodos e nenhum busca usuário por nome — só `ResolveVanityURL`, que é exato.
 
-Limitação atual: o índice cobre `persona_name` e `real_name`, **não** a vanity URL. Buscar
-`gabe` não acha o perfil cuja vanity é `gabelogannewell` mas o persona name é `Rabscuttle`.
-Indexar a vanity é uma coluna gerada a mais e um rebuild do FTS.
+O índice cobre três campos: **persona name, nome real e vanity URL**. Prefixo casa, então:
+
+| `?q=` | acha | por quê |
+| --- | --- | --- |
+| `rob` | `Robin` | persona name e vanity `robinwalker` |
+| `erik` | `EJ` | `real_name` "Erik Johnson" e vanity `erikj` |
+| `gabe` | `Rabscuttle` | vanity `GabeLoganNewell` — o persona name não tem "gabe" |
+
+A vanity é extraída de `profileurl` por coluna gerada: só URLs `/id/<vanity>` rendem valor,
+`/profiles/<steamid64>` fica `NULL`. Como toda projeção aqui, custa zero bytes.
 
 ## Cache de avatares
 

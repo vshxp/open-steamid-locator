@@ -24,13 +24,22 @@ import json
 import sqlite3
 from pathlib import Path
 
-from src.steamid import STEAM64_BASE
+_PROFILE_URL = "json_extract(raw, '$.summary.profileurl')"
+
+# Extrai a vanity de uma profileurl. Só URLs /id/<vanity> têm vanity; /profiles/
+# carrega o SteamID64 e não rende nada. A vanity não contém barra, então remover
+# as barras do trecho final basta para limpar a barra terminal.
+VANITY_EXPR = f"""
+CASE WHEN {_PROFILE_URL} LIKE '%/id/%'
+     THEN replace(substr({_PROFILE_URL}, instr({_PROFILE_URL}, '/id/') + 4), '/', '')
+END
+"""
 
 # Não se usa STRICT aqui de propósito: sob STRICT, o tipo declarado de uma coluna
 # gerada é verificado contra o que json_extract devolve, e a Steam varia o tipo de
 # alguns campos entre número e string. A integridade vem de todas as escritas
 # passarem por save(), não do banco.
-SCHEMA = """
+SCHEMA_PERFIL = f"""
 CREATE TABLE IF NOT EXISTS perfil (
   steamid64     TEXT NOT NULL UNIQUE,
   raw           TEXT NOT NULL,
@@ -43,7 +52,8 @@ CREATE TABLE IF NOT EXISTS perfil (
   real_name    TEXT GENERATED ALWAYS AS (json_extract(raw, '$.summary.realname')) VIRTUAL,
   avatar_hash  TEXT GENERATED ALWAYS AS (json_extract(raw, '$.summary.avatarhash')) VIRTUAL,
   country      TEXT GENERATED ALWAYS AS (json_extract(raw, '$.summary.loccountrycode')) VIRTUAL,
-  profile_url  TEXT GENERATED ALWAYS AS (json_extract(raw, '$.summary.profileurl')) VIRTUAL,
+  profile_url  TEXT GENERATED ALWAYS AS ({_PROFILE_URL}) VIRTUAL,
+  vanity       TEXT GENERATED ALWAYS AS ({VANITY_EXPR}) VIRTUAL,
   visibility   INTEGER GENERATED ALWAYS AS (json_extract(raw, '$.summary.communityvisibilitystate')) VIRTUAL,
   persona_state INTEGER GENERATED ALWAYS AS (json_extract(raw, '$.summary.personastate')) VIRTUAL,
   created_at   INTEGER GENERATED ALWAYS AS (json_extract(raw, '$.summary.timecreated')) VIRTUAL,
@@ -56,47 +66,71 @@ CREATE TABLE IF NOT EXISTS perfil (
   community_banned INTEGER GENERATED ALWAYS AS (json_extract(raw, '$.bans.CommunityBanned')) VIRTUAL,
   economy_ban      TEXT GENERATED ALWAYS AS (json_extract(raw, '$.bans.EconomyBan')) VIRTUAL
 );
+"""
 
+# Separado da tabela de propósito: num banco já existente o CREATE TABLE acima é
+# pulado, e um índice sobre coluna nova falharia com "no such column" se rodasse
+# antes do ALTER TABLE que a adiciona. A ordem correta é tabela → colunas → índices.
+SCHEMA_INDICES = """
 CREATE INDEX IF NOT EXISTS idx_perfil_nome    ON perfil(persona_name);
+CREATE INDEX IF NOT EXISTS idx_perfil_vanity  ON perfil(vanity);
 CREATE INDEX IF NOT EXISTS idx_perfil_pais    ON perfil(country);
 CREATE INDEX IF NOT EXISTS idx_perfil_vac     ON perfil(vac_banned);
 CREATE INDEX IF NOT EXISTS idx_perfil_criada  ON perfil(created_at);
 CREATE INDEX IF NOT EXISTS idx_perfil_fetched ON perfil(fetched_at);
 CREATE INDEX IF NOT EXISTS idx_perfil_avatar  ON perfil(avatar_hash);
+"""
 
--- content='perfil': o índice textual lê da tabela base, sem guardar 2ª cópia dos nomes.
-CREATE VIRTUAL TABLE IF NOT EXISTS perfil_fts USING fts5(
-  persona_name, real_name, content='perfil', content_rowid='rowid'
+# Fonte única das colunas indexadas textualmente. O DDL abaixo é gerado a partir
+# desta tupla justamente para não existir a possibilidade de adicionar uma coluna
+# ao índice e esquecer de atualizar uma das três triggers.
+FTS_COLS = ("persona_name", "real_name", "vanity")
+
+_LISTA = ", ".join(FTS_COLS)
+_NOVOS = ", ".join(f"new.{c}" for c in FTS_COLS)
+_ANTIGOS = ", ".join(f"old.{c}" for c in FTS_COLS)
+
+# content='perfil': o índice textual lê da tabela base, sem guardar 2ª cópia dos
+# valores. 'rebuild' repovoa o índice a partir dela.
+FTS_RECREATE = f"""
+DROP TRIGGER IF EXISTS perfil_ai;
+DROP TRIGGER IF EXISTS perfil_ad;
+DROP TRIGGER IF EXISTS perfil_au;
+DROP TABLE IF EXISTS perfil_fts;
+
+CREATE VIRTUAL TABLE perfil_fts USING fts5(
+  {_LISTA}, content='perfil', content_rowid='rowid'
 );
 
-CREATE TRIGGER IF NOT EXISTS perfil_ai AFTER INSERT ON perfil BEGIN
-  INSERT INTO perfil_fts(rowid, persona_name, real_name)
-    VALUES (new.rowid, new.persona_name, new.real_name);
+CREATE TRIGGER perfil_ai AFTER INSERT ON perfil BEGIN
+  INSERT INTO perfil_fts(rowid, {_LISTA}) VALUES (new.rowid, {_NOVOS});
 END;
 
-CREATE TRIGGER IF NOT EXISTS perfil_ad AFTER DELETE ON perfil BEGIN
-  INSERT INTO perfil_fts(perfil_fts, rowid, persona_name, real_name)
-    VALUES ('delete', old.rowid, old.persona_name, old.real_name);
+CREATE TRIGGER perfil_ad AFTER DELETE ON perfil BEGIN
+  INSERT INTO perfil_fts(perfil_fts, rowid, {_LISTA})
+    VALUES ('delete', old.rowid, {_ANTIGOS});
 END;
 
-CREATE TRIGGER IF NOT EXISTS perfil_au AFTER UPDATE ON perfil BEGIN
-  INSERT INTO perfil_fts(perfil_fts, rowid, persona_name, real_name)
-    VALUES ('delete', old.rowid, old.persona_name, old.real_name);
-  INSERT INTO perfil_fts(rowid, persona_name, real_name)
-    VALUES (new.rowid, new.persona_name, new.real_name);
+CREATE TRIGGER perfil_au AFTER UPDATE ON perfil BEGIN
+  INSERT INTO perfil_fts(perfil_fts, rowid, {_LISTA})
+    VALUES ('delete', old.rowid, {_ANTIGOS});
+  INSERT INTO perfil_fts(rowid, {_LISTA}) VALUES (new.rowid, {_NOVOS});
 END;
+
+INSERT INTO perfil_fts(perfil_fts) VALUES ('rebuild');
 """
 
 CAMPOS = (
-    "steamid64", "account_id", "persona_name", "real_name", "avatar_hash",
-    "country", "profile_url", "visibility", "persona_state", "created_at",
-    "last_logoff", "clan_id", "vac_banned", "vac_ban_count", "game_ban_count",
-    "community_banned", "economy_ban", "fetched_at", "first_seen_at",
+    "steamid64", "account_id", "persona_name", "real_name", "vanity",
+    "avatar_hash", "country", "profile_url", "visibility", "persona_state",
+    "created_at", "last_logoff", "clan_id", "vac_banned", "vac_ban_count",
+    "game_ban_count", "community_banned", "economy_ban", "fetched_at",
+    "first_seen_at",
 )
 
 CAMPOS_PUBLICOS = ", ".join(CAMPOS)
 
-# Versão qualificada: no JOIN com perfil_fts os nomes persona_name e real_name
+# Versão qualificada: no JOIN com perfil_fts os nomes das colunas indexadas
 # existem nas duas tabelas, e o SQLite recusa a coluna ambígua.
 CAMPOS_PUBLICOS_P = ", ".join(f"p.{c}" for c in CAMPOS)
 
@@ -138,7 +172,7 @@ class ProfileStore:
         self._path = path
         path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as con:
-            con.executescript(SCHEMA)
+            self._migrar(con)
 
     @property
     def path(self) -> Path:
@@ -153,6 +187,38 @@ class ProfileStore:
         con.execute("PRAGMA busy_timeout=10000")
         con.execute("PRAGMA synchronous=NORMAL")
         return con
+
+    @staticmethod
+    def _migrar(con: sqlite3.Connection) -> None:
+        """Leva o banco ao schema atual, seja ele novo ou de uma versão anterior.
+
+        Idempotente: roda a cada inicialização. Bancos criados antes de uma coluna
+        existir a ganham por ALTER TABLE — o SQLite aceita adicionar coluna gerada
+        VIRTUAL, que não reescreve as linhas existentes.
+        """
+        con.executescript(SCHEMA_PERFIL)
+
+        # table_xinfo, não table_info: `table_info` **omite** colunas geradas, então
+        # usá-lo aqui faria a migração tentar adicionar `vanity` a cada
+        # inicialização e falhar com "duplicate column name".
+        colunas = {linha["name"] for linha in con.execute("PRAGMA table_xinfo(perfil)")}
+        for nome, expressao in (("vanity", VANITY_EXPR),):
+            if nome not in colunas:
+                con.execute(
+                    f"ALTER TABLE perfil ADD COLUMN {nome} TEXT "
+                    f"GENERATED ALWAYS AS ({expressao}) VIRTUAL"
+                )
+
+        # Só agora: os índices podem referenciar colunas acrescentadas acima.
+        con.executescript(SCHEMA_INDICES)
+
+        # Se o conjunto de colunas do índice textual divergir do desejado, recria e
+        # repovoa. Cobre também o banco novo, em que perfil_fts ainda não existe.
+        fts_atual = tuple(
+            linha["name"] for linha in con.execute("PRAGMA table_info(perfil_fts)")
+        )
+        if fts_atual != FTS_COLS:
+            con.executescript(FTS_RECREATE)
 
     # ---- implementações síncronas ----
 
@@ -186,7 +252,10 @@ class ProfileStore:
         return dict(linha) if linha else None
 
     def _search(self, termo: str, limite: int, offset: int) -> dict:
-        """Busca por nome parecido na base local — o que a Web API não oferece."""
+        """Busca por nome parecido na base local — o que a Web API não oferece.
+
+        Cobre persona name, nome real e vanity URL.
+        """
         termo = termo.strip()
         if not termo:
             # Sem termo: os mais recentes primeiro. Serve para inspecionar o que
@@ -199,6 +268,7 @@ class ProfileStore:
                     (limite, offset),
                 ).fetchall()
             return {"total": total, "itens": [dict(x) for x in linhas]}
+
         consulta = _consulta_fts(termo)
         if not consulta:
             return {"total": 0, "itens": []}
@@ -253,5 +323,4 @@ class ProfileStore:
         return await asyncio.to_thread(self._stats)
 
 
-# Reexportado para quem precisar da base aritmética junto do store.
-__all__ = ["ProfileStore", "documento_canonico", "STEAM64_BASE"]
+__all__ = ["ProfileStore", "documento_canonico"]
