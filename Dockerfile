@@ -32,7 +32,7 @@ COPY src ./src
 # O diretório precisa existir na imagem e já pertencer ao app: um volume nomeado
 # montado em /app/cache herda dono e permissão do que estava ali na imagem. Sem
 # isto o Docker cria o ponto de montagem como root e o processo não escreve.
-RUN mkdir -p /app/cache/avatars \
+RUN mkdir -p /app/cache/avatars /app/data \
     && useradd --create-home --uid 1000 app \
     && chown -R app:app /app
 USER app

@@ -10,6 +10,10 @@ BASE_DIR = Path(__file__).resolve().parent
 # /app/cache no container e <repo>/cache fora dele.
 DEFAULT_CACHE_DIR = BASE_DIR.parent / "cache"
 
+# Separado do cache de propósito: cache é descartável, isto é dado. Compartilhar o
+# diretório convidaria alguém a apagar os perfis salvos junto com os avatares.
+DEFAULT_DATA_DIR = BASE_DIR.parent / "data"
+
 
 class Settings(BaseSettings):
     """Configuração da aplicação, lida do .env único compartilhado com o Docker."""
@@ -31,6 +35,9 @@ class Settings(BaseSettings):
     # Onde os avatares baixados ficam. Em Docker é um volume nomeado, para
     # sobreviver à recriação do container.
     cache_dir: Path = DEFAULT_CACHE_DIR
+
+    # Banco dos perfis salvos. Volume próprio, separado do cache.
+    data_dir: Path = DEFAULT_DATA_DIR
 
 
 settings = Settings()

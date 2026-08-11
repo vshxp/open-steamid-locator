@@ -11,9 +11,12 @@ from fastapi.templating import Jinja2Templates
 
 from src.avatar_cache import AVATAR_HASH_RE, AvatarCache, AvatarCacheError
 from src.config import BASE_DIR, settings
+from src.db import ProfileStore, documento_canonico
 from src.lookup import lookup
 from src.steam_api import SteamClient
 from src.steamid import SteamIdError
+
+log = logging.getLogger("open_steamid_locator")
 
 
 # O httpx loga "HTTP Request: GET <url>" em nível INFO. A URL da Steam Web API
@@ -41,6 +44,7 @@ async def lifespan(app: FastAPI):
         SteamClient(settings.steam_api_key, http) if settings.steam_api_key else None
     )
     app.state.avatars = AvatarCache(settings.cache_dir / "avatars", http)
+    app.state.store = ProfileStore(settings.data_dir / "perfis.sqlite3")
 
     try:
         yield
@@ -108,6 +112,51 @@ def get_avatar_cache(request: Request) -> AvatarCache:
     return request.app.state.avatars
 
 
+def get_store(request: Request) -> ProfileStore:
+    return request.app.state.store
+
+
+async def persistir(result: dict, store: ProfileStore, cache: AvatarCache) -> dict:
+    """Salva o perfil e garante a foto em disco. Devolve `result` enriquecido.
+
+    Só grava quando a Steam devolveu dados: sem chave ou com erro de API não há
+    perfil para salvar, e gravar um documento vazio apagaria o que já estava lá.
+
+    Falha de persistência nunca derruba a resposta — a busca continua útil mesmo
+    que o disco esteja cheio ou o banco travado.
+    """
+    api = result.get("steam_api", {})
+    if api.get("status") != "ok":
+        return result
+
+    cru = api.get("raw") or {}
+    summary, bans = cru.get("summary"), cru.get("bans")
+    if summary is None and bans is None:
+        return result
+
+    steamid64 = result["steamid"]["steamid64"]
+    agora = int(datetime.now(timezone.utc).timestamp())
+
+    try:
+        meta = await store.save(steamid64, documento_canonico(summary, bans), agora)
+        result["stored"] = meta
+    except Exception:
+        log.exception("falha ao salvar perfil %s", steamid64)
+        result["stored"] = {"erro": "não foi possível salvar o perfil"}
+        return result
+
+    # Pré-baixa a foto para o perfil estar completo em disco mesmo que ninguém
+    # abra a página. Idempotente: mesmo hash, mesmo arquivo, baixado uma vez.
+    avatar_hash = (api.get("interpreted") or {}).get("avatar_hash")
+    if avatar_hash and AVATAR_HASH_RE.match(avatar_hash) and not cache.cached(avatar_hash):
+        try:
+            await cache.fetch(avatar_hash)
+        except AvatarCacheError as exc:
+            log.warning("avatar %s não baixado: %s", avatar_hash, exc)
+
+    return result
+
+
 # Placeholder servido quando o avatar não pôde ser obtido. Fica inline em SVG
 # para a página nunca precisar de um recurso externo, nem mesmo no caminho de
 # falha.
@@ -139,6 +188,8 @@ async def search(
     request: Request,
     q: str = Query("", description="SteamID64, STEAM_0:1:x, [U:1:x], URL de perfil ou vanity"),
     client: SteamClient | None = Depends(get_steam_client),
+    store: ProfileStore = Depends(get_store),
+    cache: AvatarCache = Depends(get_avatar_cache),
 ):
     """Fragmento htmx: o JSON do resultado, ou a mensagem de erro.
 
@@ -146,7 +197,7 @@ async def search(
     e aqui o erro é conteúdo a exibir, não falha de transporte.
     """
     try:
-        result = await lookup(q, client)
+        result = await persistir(await lookup(q, client), store, cache)
     except SteamIdError as exc:
         return templates.TemplateResponse(
             request, "partials/error.html", {"message": str(exc)}
@@ -208,6 +259,8 @@ async def perfil(
     request: Request,
     query: str,
     client: SteamClient | None = Depends(get_steam_client),
+    store: ProfileStore = Depends(get_store),
+    cache: AvatarCache = Depends(get_avatar_cache),
 ):
     """Página completa e compartilhável com os dados da API já formatados.
 
@@ -215,7 +268,7 @@ async def perfil(
     /perfil/76561197960287930 ou /perfil/gabelogannewell.
     """
     try:
-        result = await lookup(query, client)
+        result = await persistir(await lookup(query, client), store, cache)
     except SteamIdError as exc:
         return templates.TemplateResponse(
             request,
@@ -239,12 +292,29 @@ async def perfil(
 async def api_lookup(
     q: str = Query("", description="SteamID64, STEAM_0:1:x, [U:1:x], URL de perfil ou vanity"),
     client: SteamClient | None = Depends(get_steam_client),
+    store: ProfileStore = Depends(get_store),
+    cache: AvatarCache = Depends(get_avatar_cache),
 ):
     """Mesma busca, como JSON puro — para consumo programático."""
     try:
-        return await lookup(q, client)
+        return await persistir(await lookup(q, client), store, cache)
     except SteamIdError as exc:
         return JSONResponse(status_code=400, content={"error": str(exc), "query": q})
+
+
+@app.get("/api/salvos")
+async def api_salvos(
+    q: str = Query("", description="Nome parecido; vazio lista os mais recentes"),
+    limite: int = Query(25, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    store: ProfileStore = Depends(get_store),
+):
+    """Consulta os perfis já salvos localmente, sem tocar a Steam.
+
+    Busca por nome parecido via FTS5 — exatamente o que a Steam Web API não
+    oferece, possível aqui porque os dados são seus.
+    """
+    return await store.search(q, limite=limite, offset=offset)
 
 
 @app.get("/hello", response_class=HTMLResponse)
@@ -254,9 +324,13 @@ async def hello(request: Request):
 
 
 @app.get("/health")
-async def health(cache: AvatarCache = Depends(get_avatar_cache)):
+async def health(
+    cache: AvatarCache = Depends(get_avatar_cache),
+    store: ProfileStore = Depends(get_store),
+):
     return {
         "status": "ok",
         "steam_api": settings.steam_api_key != "",
         "avatar_cache": cache.stats(),
+        "perfis": await store.stats(),
     }

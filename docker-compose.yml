@@ -14,6 +14,8 @@ services:
       # Volume nomeado, não bind mount: o cache sobrevive à recriação do
       # container e não deixa arquivos root-owned no repositório do host.
       - avatar-cache:/app/cache
+      # Volume separado do cache: cache é descartável, isto é dado.
+      - perfil-data:/app/data
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
       interval: 10s
@@ -24,3 +26,4 @@ services:
 
 volumes:
   avatar-cache:
+  perfil-data:

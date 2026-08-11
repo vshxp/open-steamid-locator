@@ -6,6 +6,10 @@ escuro e interatividade via htmx (fragmentos renderizados no servidor, sem frame
 Digite um SteamID em qualquer formato — ou uma URL de perfil — e receba o JSON com todos
 os formatos equivalentes, mais os dados de perfil quando há Steam Web API key.
 
+Cada busca bem-sucedida é salva localmente em SQLite, com a foto do perfil em disco, sem
+duplicar informação — e a base local ganha busca por nome parecido, que a Steam Web API não
+oferece.
+
 ## Rodar
 
 ```sh
@@ -42,6 +46,7 @@ conta e os limites de uso estão em [`docs/steam-api-key.md`](docs/steam-api-key
 | `GET /perfil/{id}` | página completa e compartilhável com os dados formatados |
 | `GET /avatar/{hash}` | avatar do cache local; baixa da CDN da Steam no 1º acesso |
 | `GET /api/lookup?q=…` | o mesmo resultado como JSON puro |
+| `GET /api/salvos?q=…` | perfis já salvos localmente; busca por nome parecido, sem tocar a Steam |
 | `GET /health` | `{"status":"ok","steam_api":bool}` — usado pelo healthcheck |
 | `GET /hello` | fragmento do walking skeleton, mantido como smoke test |
 | `GET /docs` | OpenAPI interativa (FastAPI) |
@@ -71,6 +76,59 @@ SteamID64 tem 17 dígitos.
 O campo `steam_api.status` é sempre explícito sobre o que aconteceu — `skipped` (sem key),
 `error` (rede, 401, rate limit) ou `not_found`. A conversão é devolvida em todos os casos:
 falha da Steam não derruba a resposta.
+
+## Perfis salvos
+
+Toda busca bem-sucedida grava o perfil em SQLite (`/app/data/perfis.sqlite3`, volume
+`perfil-data`) e pré-baixa o avatar, para o perfil ficar completo em disco mesmo que ninguém
+abra a página.
+
+```sh
+curl -s 'http://localhost:8000/api/salvos?q=erik' | python3 -m json.tool
+curl -s 'http://localhost:8000/api/salvos?limite=10&offset=0'   # q vazio: mais recentes
+curl -s http://localhost:8000/health   # → "perfis": {"profiles": N, "bytes": N}
+```
+
+### O dado vive uma única vez
+
+O princípio do schema é não haver cópia de nada:
+
+- A coluna **`raw`** guarda a resposta da Steam exatamente como veio. É a única fonte.
+- Todos os campos consultáveis (`persona_name`, `country`, `vac_banned`, `created_at`, …) são
+  **colunas geradas VIRTUAL** — `json_extract` computado na leitura, **zero bytes** em disco.
+  Medido: uma tabela só com o JSON e outra com 8 colunas geradas ocupam exatamente os mesmos
+  634.880 bytes para 2.000 linhas. E ainda assim dá para indexar: `EXPLAIN QUERY PLAN`
+  confirma `SEARCH perfil USING INDEX idx_perfil_nome`.
+- A busca textual usa **FTS5 com `content='perfil'`**, ou seja lê da tabela base em vez de
+  guardar uma segunda cópia dos nomes. Mantida em sincronia por triggers.
+- A **foto** não fica no banco. Ela já está deduplicada por construção no cache de avatares,
+  endereçada pelo `avatarhash`; o banco guarda só o hash. Blob binário dentro do SQLite
+  duplicaria o que o filesystem já resolve.
+
+### Modelo temporal: só o estado atual
+
+Cada consulta **sobrescreve** o perfil — `fetched_at` avança, `first_seen_at` é preservado.
+Buscar o mesmo perfil 100 vezes deixa 1 linha, não 100. Formatos diferentes do mesmo perfil
+(`STEAM_0:1:1`, `[U:1:3]`, `3`, vanity) convergem para a mesma linha, porque a chave é o
+SteamID64.
+
+> **Não há histórico.** Decisão explícita do projeto. Como a Steam Web API é
+> presente-do-indicativo e não tem endpoint de histórico, mudanças de nome, aparição de ban e
+> salto de playtime **não são recuperáveis depois**. Para gravá-las, o caminho é uma tabela
+> `observacao(steamid64, em, hash)` referenciando estados distintos por hash de conteúdo — o
+> `raw` já é serializado em forma canônica (chaves ordenadas, sem espaços) justamente para
+> tornar isso barato.
+
+### Busca por nome parecido
+
+O FTS5 dá localmente o que a Steam Web API não oferece: **busca por nome aproximado**. A API
+tem 169 métodos e nenhum busca usuário por nome — só `ResolveVanityURL`, que é exato. Sobre
+os seus próprios dados acumulados, `?q=rob` acha `Robin` e `?q=erik` acha `EJ` (pelo
+`real_name` "Erik Johnson").
+
+Limitação atual: o índice cobre `persona_name` e `real_name`, **não** a vanity URL. Buscar
+`gabe` não acha o perfil cuja vanity é `gabelogannewell` mas o persona name é `Rabscuttle`.
+Indexar a vanity é uma coluna gerada a mais e um rebuild do FTS.
 
 ## Cache de avatares
 
@@ -109,8 +167,11 @@ Detalhes de implementação que importam:
 - **Volume nomeado** `avatar-cache`, não bind mount: sobrevive à recriação do container e não
   deixa arquivos root-owned no repositório do host.
 - O cache **cresce sem limite**. Avatares têm ~5–30 KB, então 10 mil perfis ficam na casa de
-  centenas de MB. Não há política de expiração; limpar é `docker compose down -v` ou
+  centenas de MB. Não há política de expiração; limpar é
   `docker volume rm open-steamid-locator_avatar-cache`.
+
+> ⚠️ `docker compose down -v` remove **os dois** volumes — apaga o cache de avatares *e o
+> banco dos perfis salvos*. Para limpar só o cache, remova o volume `avatar-cache` pelo nome.
 
 ## Estrutura
 
@@ -125,9 +186,11 @@ src/
   steamid.py           parsing e conversão — aritmética pura, sem I/O
   steam_api.py         cliente da Steam Web API (vanity, summaries, bans)
   avatar_cache.py      download + cache em disco dos avatares
+  db.py                SQLite: schema, upsert, busca FTS5
   lookup.py            orquestração: parse → converte → enriquece
   templates/           base.html, index.html, perfil.html, partials/*
-  cache/               (volume) avatares baixados — fora de src/ e do git
+  cache/               (volume avatar-cache) avatares baixados
+  data/                (volume perfil-data) perfis.sqlite3
   static/css/          style.css
   static/js/           htmx.min.js  (2.0.4, vendorizado — sem CDN, funciona offline)
 ```
@@ -165,6 +228,8 @@ O que já está tratado no código:
 | Cache envenenado | Magic bytes de JPEG conferidos e tamanho limitado a 2 MB antes de gravar. Escrita atômica, sem arquivo truncado servido. |
 | Segredos no repositório | `.env` no `.gitignore` e no `.dockerignore`; não entra em nenhuma camada da imagem. |
 | CSRF | Não há sessão, cookie ou autenticação, e todos os endpoints são `GET` somente-leitura. Sem superfície. |
+| SQL injection | Toda consulta usa parâmetros vinculados; nenhum valor de usuário é concatenado em SQL. |
+| Injeção na sintaxe do FTS5 | O termo de busca nunca vira sintaxe: cada palavra é aspeada e as aspas do texto são dobradas (`""` é aspa literal no FTS5). Sem isso, um `"` no termo fecharia a string e o resto seria lido como operador. Há ainda um `except OperationalError` que devolve zero resultados em vez de 500. |
 
 ### Antes de expor isto na internet
 

@@ -5,8 +5,10 @@ __pycache__/
 .venv/
 venv/
 
-# cache local de avatares (em Docker é volume nomeado; fora dele, cai aqui)
+# cache de avatares e banco dos perfis (em Docker são volumes nomeados; fora
+# do Docker, caem aqui)
 /cache/
+/data/
 
 *.sqlite3
 *.db
